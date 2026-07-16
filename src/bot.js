@@ -324,7 +324,7 @@ bot.on('message', async (msg) => {
             }
 
             // Prompt untuk model AI
-            const prompt = `Berikut adalah data rekap penjualan (buku kas) warung Sambal Orek:\n\n${contextData}\n\nPertanyaan pengguna: ${msg.text}\n\nJawablah berdasarkan data di atas dengan singkat, jelas, dan ramah. Jika ada angka Rupiah, formatlah dengan rapi.`;
+            const prompt = `Berikut adalah data rekap penjualan (buku kas) warung Sambal Orek:\n\n${contextData}\n\nPesan pengguna: "${msg.text}"\n\nJika pesan pengguna adalah sapaan atau di luar konteks data, balaslah dengan ramah selayaknya asisten. Jika pesan pengguna menanyakan data, jawablah berdasarkan data di atas dengan singkat, jelas, dan ramah. Jika ada angka Rupiah, formatlah dengan rapi.`;
 
             const result = await chatModel.generateContent(prompt);
             let aiResponse = result.response.text();
