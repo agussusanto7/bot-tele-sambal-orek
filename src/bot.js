@@ -331,7 +331,7 @@ bot.on('message', async (msg) => {
             bot.sendMessage(chatId, aiResponse, { parse_mode: 'Markdown' });
         } catch (error) {
             console.error("Error Q&A:", error);
-            bot.sendMessage(chatId, "❌ Maaf, saya sedang kesulitan membaca buku kas saat ini.");
+            bot.sendMessage(chatId, "❌ Maaf, error: " + error.message);
         }
     }
 });
