@@ -1,6 +1,4 @@
 require('dotenv').config();
-const axios = require('axios'); // We use axios or native fetch. node 18 has fetch. Let's use fetch.
-// Wait, no need for axios.
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const VERCEL_URL = process.argv[2]; // url passed from terminal
