@@ -1,18 +1,29 @@
 require('dotenv').config();
 const bot = require('../src/bot');
 
+// Vercel Hobi plan: 10 detik max execution time
+// Strategy: jalankan bot dulu, baru kirim ACK
+// Bot harus selesai dalam ~8 detik, sisanya untuk ACK + overhead
+const BOT_PROCESS_TIMEOUT_MS = 8000;
+
 module.exports = async (req, res) => {
     try {
         if (req.method === 'POST') {
-            // Meneruskan request dari Telegram ke sistem Bot kita
-            bot.processUpdate(req.body);
-            
-            // Vercel mematikan proses segera setelah fungsi async ini selesai.
-            // Oleh karena itu, kita HARUS menahan eksekusi selama 8 detik 
-            // menggunakan promise agar bot punya cukup waktu untuk memanggil AI Gemini dan API Telegram.
-            await new Promise(resolve => setTimeout(resolve, 8000));
-            
+            // Proses dengan timeout — bot harus selesai dalam 8 detik
+            const timeoutPromise = new Promise(resolve => {
+                setTimeout(resolve, BOT_PROCESS_TIMEOUT_MS);
+            });
+
+            const botPromise = bot.processUpdate(req.body).catch(err => {
+                console.error("Bot processUpdate error:", err.message);
+            });
+
+            // Race antara bot selesai atau timeout
+            await Promise.race([botPromise, timeoutPromise]);
+
+            // Kirim ACK ke Telegram
             res.status(200).send('OK');
+            return;
         } else {
             res.status(200).send('Webhook Bot Telegram Sambal Orek Aktif! 🚀');
         }

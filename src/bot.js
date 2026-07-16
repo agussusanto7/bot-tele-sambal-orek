@@ -1,11 +1,14 @@
 const TelegramBot = require('node-telegram-bot-api');
-const { google } = require('googleapis'); // Tambahkan Google API
+const { google } = require('googleapis');
 const { model, chatModel } = require('./ai');
+const path = require('path');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
-// Jika jalan di Vercel, matikan polling (karena Vercel pakai Webhook). Jika di lokal, nyalakan polling.
 const isVercel = process.env.VERCEL === '1';
 const bot = new TelegramBot(token, { polling: !isVercel });
+
+// Path absolut untuk google-credentials.json agar berfungsi di Vercel juga
+const CREDENTIALS_PATH = path.resolve(__dirname, '..', 'google-credentials.json');
 
 // Masukkan ID Spreadsheet Anda di sini (Ganti jika menggunakan spreadsheet lain) https://docs.google.com/spreadsheets/d/1VnIU_xRtjAGQMeEqjpJlo2v4BYkqokaF/edit?gid=2078904750#gid=2078904750
 const SPREADSHEET_ID = '1Wh_uT2o9_WP66JxJQC9mGf_Q1NjuOVP5tjBFXHNpZNM';
@@ -16,13 +19,51 @@ const formatRp = (angka) => new Intl.NumberFormat('id-ID', { style: 'currency', 
 console.log("🤖 Bot Telegram Sambal Orek sudah berjalan (Mode Google Sheets)...");
 
 // ==========================================
+// HELPER: Sheets Auth dengan Graceful Fallback
+// ==========================================
+async function getSheetsClient() {
+    try {
+        const auth = new google.auth.GoogleAuth({
+            keyFile: CREDENTIALS_PATH,
+            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+        });
+        const client = await auth.getClient();
+        return google.sheets({ version: 'v4', auth: client });
+    } catch (error) {
+        console.error("Sheets auth error:", error.message);
+        return null;
+    }
+}
+
+async function fetchSheetData() {
+    const sheets = await getSheetsClient();
+    if (!sheets) return null;
+
+    try {
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range: 'REPORT!A:J',
+        });
+        return response.data.values;
+    } catch (error) {
+        console.error("Sheets fetch error:", error.message);
+        return null;
+    }
+}
+
+// ==========================================
+// DETEKSI SAPAAN — sebelum akses Sheets
+// ==========================================
+const greetingPatterns = /^(hai|halo|hello|hi|hey|test|ping|pagi|siang|sore|malam|assalamualaikum|woi|prabowo|tes|cd|cde|hidelo|helooo?)$/i;
+
+// ==========================================
 // FUNGSI UNTUK MENYIMPAN KE GOOGLE SHEETS
 // ==========================================
 async function simpanKeSpreadsheet(data) {
     try {
         // 1. Autentikasi dengan Service Account
         const auth = new google.auth.GoogleAuth({
-            keyFile: './google-credentials.json', // Pastikan file ini ada
+            keyFile: CREDENTIALS_PATH, // Pastikan file ini ada
             scopes: ['https://www.googleapis.com/auth/spreadsheets'],
         });
 
@@ -83,7 +124,7 @@ bot.onText(/\/report/, async (msg) => {
     try {
         // Autentikasi Google Sheets
         const auth = new google.auth.GoogleAuth({
-            keyFile: './google-credentials.json',
+            keyFile: CREDENTIALS_PATH,
             scopes: ['https://www.googleapis.com/auth/spreadsheets'],
         });
         const client = await auth.getClient();
@@ -157,7 +198,7 @@ bot.onText(/\/export/, async (msg) => {
 
     try {
         const auth = new google.auth.GoogleAuth({
-            keyFile: './google-credentials.json',
+            keyFile: CREDENTIALS_PATH,
             scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly', 'https://www.googleapis.com/auth/drive.readonly'],
         });
         
@@ -297,50 +338,50 @@ bot.on('message', async (msg) => {
             await processPhotos(chatId, [msg.photo[msg.photo.length - 1].file_id]);
         }
     } else if (msg.text) {
-        bot.sendMessage(chatId, "🤔 Sedang membaca buku kas untuk mencari jawaban...");
+        // 1. Cek apakah ini sapaan — jawab langsung tanpa Sheets
+        if (greetingPatterns.test(msg.text.trim())) {
+            bot.sendMessage(chatId, "🤔 Sedang membaca buku kas untuk mencari jawaban...");
+            try {
+                const prompt = `Pesan pengguna: "${msg.text}". Ini adalah sapaan. Balaslah dengan ramah dan tawarkan bantuan terkait Warung Sambal Orek (bisa tanya laporan, rekapan, dll). Gunakan format Markdown dengan emoji. Maksimum 3 kalimat.`;
+                const result = await chatModel.generateContent(prompt);
+                let aiResponse = result.response.text();
+                aiResponse = aiResponse.replace(/\*\*/g, '*');
+                bot.sendMessage(chatId, aiResponse.trim(), { parse_mode: 'Markdown' });
+            } catch (error) {
+                console.error("AI greeting error:", error.message);
+                bot.sendMessage(chatId, "Halo! 👋 Selamat datang di Bot Kasir Sambal Orek. Ada yang bisa saya bantu?");
+            }
+            return;
+        }
 
+        // 2. Bukan sapaan — coba ambil data Sheets, tapi tetap jalankan AI jika gagal
         try {
-            // Autentikasi Google Sheets
-            const auth = new google.auth.GoogleAuth({
-                keyFile: './google-credentials.json',
-                scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-            });
-            const client = await auth.getClient();
-            const sheets = google.sheets({ version: 'v4', auth: client });
-            const spreadsheetId = SPREADSHEET_ID;
-
-            // Ambil data dari sheet REPORT
-            const response = await sheets.spreadsheets.values.get({
-                spreadsheetId,
-                range: 'REPORT!A:J',
-            });
-            const rows = response.data.values;
-
-            // Konversi rows ke format teks tabel sederhana
+            const rows = await fetchSheetData();
             let contextData = "Data kasir kosong.";
             if (rows && rows.length > 0) {
-                // Mengirim SELURUH data tanpa dibatasi (sesuai permintaan user) agar AI bisa menganalisa semua tanggal
                 contextData = rows.map(row => row.join(' | ')).join('\n');
             }
 
-            // Prompt untuk model AI
-            const prompt = `Berikut adalah data rekap penjualan (buku kas) warung Sambal Orek:\n\n${contextData}\n\nPesan pengguna: "${msg.text}"\n\nJika pesan pengguna adalah sapaan atau di luar konteks data, balaslah dengan ramah selayaknya asisten. Jika pesan pengguna menanyakan data, jawablah berdasarkan data di atas dengan singkat, jelas, dan ramah. Jika ada angka Rupiah, formatlah dengan rapi.`;
+            const prompt = `Berikut adalah data rekap penjualan (buku kas) warung Sambal Orek:\n\n${contextData}\n\nPesan pengguna: "${msg.text}"\n\nJika pesan pengguna menanyakan data, jawablah berdasarkan data di atas dengan singkat, jelas, dan ramah. Jika tidak ada data relevan, jawab saja bahwa tidak ada data untuk pertanyaan itu. Jika ada angka Rupiah, formatlah dengan rapi.`;
 
             const result = await chatModel.generateContent(prompt);
             let aiResponse = result.response.text();
 
-            // Sesuaikan format markdown Gemini (**) menjadi format Telegram (*)
             aiResponse = aiResponse.replace(/\*\*/g, '*');
 
             bot.sendMessage(chatId, aiResponse, { parse_mode: 'Markdown' });
         } catch (error) {
-            console.error("Error Q&A:", error);
-            if (error.message && (error.message.toLowerCase().includes('gemini') || error.message.toLowerCase().includes('google'))) {
-                bot.sendMessage(chatId, "❌ Server Gemini Error: API AI sedang bermasalah atau tidak tersambung. Detail: " + error.message);
-            } else if (error.message && error.message.includes('ENOENT')) {
-                bot.sendMessage(chatId, "❌ Error File: File google-credentials.json tidak ditemukan di Vercel!");
-            } else {
-                bot.sendMessage(chatId, "❌ Terjadi Kesalahan: " + error.message);
+            console.error("Error Q&A:", error.message);
+            // Fallback: tetap coba AI tanpa data sheets
+            try {
+                const prompt = `Pesan pengguna: "${msg.text}". Data sheets tidak tersedia (error). Jawab dengan ramah bahwa data kasir sedang tidak bisa diakses, tapi tetap tawarkan bantuan.`;
+                const result = await chatModel.generateContent(prompt);
+                let aiResponse = result.response.text();
+                aiResponse = aiResponse.replace(/\*\*/g, '*');
+                bot.sendMessage(chatId, aiResponse, { parse_mode: 'Markdown' });
+            } catch (fallbackError) {
+                console.error("Fallback AI error:", fallbackError.message);
+                bot.sendMessage(chatId, "❌ Maaf, terjadi kesalahan. Silakan coba lagi nanti.");
             }
         }
     }
