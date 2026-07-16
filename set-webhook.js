@@ -1,7 +1,11 @@
 require('dotenv').config();
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const VERCEL_URL = process.argv[2]; // url passed from terminal
+let VERCEL_URL = process.argv[2]; // url passed from terminal
+
+if (VERCEL_URL && VERCEL_URL.endsWith('/')) {
+    VERCEL_URL = VERCEL_URL.slice(0, -1);
+}
 
 if (!VERCEL_URL) {
     console.error("❌ ERROR: Masukkan URL Vercel Anda!");
