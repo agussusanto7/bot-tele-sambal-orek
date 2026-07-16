@@ -265,7 +265,11 @@ async function processPhotos(chatId, fileIds) {
         }
     } catch (error) {
         console.error("Error Processing Image(s):", error);
-        bot.sendMessage(chatId, "❌ Gagal memproses gambar. Pastikan tulisan pada nota terbaca dengan jelas.");
+        if (error.message && (error.message.toLowerCase().includes('gemini') || error.message.toLowerCase().includes('google'))) {
+            bot.sendMessage(chatId, "❌ Server Gemini Error: API AI sedang bermasalah atau tidak tersambung. Detail: " + error.message);
+        } else {
+            bot.sendMessage(chatId, "❌ Gagal memproses gambar. Pastikan tulisan pada nota terbaca dengan jelas. Detail: " + error.message);
+        }
     }
 }
 
@@ -331,7 +335,13 @@ bot.on('message', async (msg) => {
             bot.sendMessage(chatId, aiResponse, { parse_mode: 'Markdown' });
         } catch (error) {
             console.error("Error Q&A:", error);
-            bot.sendMessage(chatId, "❌ Maaf, error: " + error.message);
+            if (error.message && (error.message.toLowerCase().includes('gemini') || error.message.toLowerCase().includes('google'))) {
+                bot.sendMessage(chatId, "❌ Server Gemini Error: API AI sedang bermasalah atau tidak tersambung. Detail: " + error.message);
+            } else if (error.message && error.message.includes('ENOENT')) {
+                bot.sendMessage(chatId, "❌ Error File: File google-credentials.json tidak ditemukan di Vercel!");
+            } else {
+                bot.sendMessage(chatId, "❌ Terjadi Kesalahan: " + error.message);
+            }
         }
     }
 });
