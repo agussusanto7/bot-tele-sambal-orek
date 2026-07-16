@@ -2,26 +2,34 @@ require('dotenv').config();
 const bot = require('../src/bot');
 
 // Vercel Hobi plan: 10 detik max execution time
-// Strategy: jalankan bot dulu, baru kirim ACK
-// Bot harus selesai dalam ~8 detik, sisanya untuk ACK + overhead
-const BOT_PROCESS_TIMEOUT_MS = 8000;
+// Karena bot.processUpdate() mengembalikan promise yang resolve instan,
+// kita perlu menunggu semua proses async bot selesai manual.
+// Bot.js expose pendingProses untuk tracking.
+const MAX_WAIT_MS = 8000;
 
 module.exports = async (req, res) => {
     try {
         if (req.method === 'POST') {
-            // Proses dengan timeout — bot harus selesai dalam 8 detik
-            const timeoutPromise = new Promise(resolve => {
-                setTimeout(resolve, BOT_PROCESS_TIMEOUT_MS);
+            const startTime = Date.now();
+
+            // Dispatch ke bot (sync, tidak menunggu selesai)
+            bot.handleUpdate(req.body);
+
+            // Tahan function hidup sampai semua proses async bot selesai
+            const waitUntilDone = new Promise((resolve) => {
+                const checkInterval = setInterval(() => {
+                    if (bot.allProcessesDone()) {
+                        clearInterval(checkInterval);
+                        resolve();
+                    } else if ((Date.now() - startTime) > MAX_WAIT_MS) {
+                        clearInterval(checkInterval);
+                        resolve(); // Timeout — kirim ACK
+                    }
+                }, 500);
             });
 
-            const botPromise = bot.processUpdate(req.body).catch(err => {
-                console.error("Bot processUpdate error:", err.message);
-            });
+            await waitUntilDone;
 
-            // Race antara bot selesai atau timeout
-            await Promise.race([botPromise, timeoutPromise]);
-
-            // Kirim ACK ke Telegram
             res.status(200).send('OK');
             return;
         } else {
