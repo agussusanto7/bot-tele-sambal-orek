@@ -1,0 +1,339 @@
+const TelegramBot = require('node-telegram-bot-api');
+const { google } = require('googleapis'); // Tambahkan Google API
+const { model, chatModel } = require('./ai');
+
+const token = process.env.TELEGRAM_BOT_TOKEN;
+// Jika jalan di Vercel, matikan polling (karena Vercel pakai Webhook). Jika di lokal, nyalakan polling.
+const isVercel = process.env.VERCEL === '1';
+const bot = new TelegramBot(token, { polling: !isVercel });
+
+// Masukkan ID Spreadsheet Anda di sini (Ganti jika menggunakan spreadsheet lain) https://docs.google.com/spreadsheets/d/1VnIU_xRtjAGQMeEqjpJlo2v4BYkqokaF/edit?gid=2078904750#gid=2078904750
+const SPREADSHEET_ID = '1Wh_uT2o9_WP66JxJQC9mGf_Q1NjuOVP5tjBFXHNpZNM';
+
+// Helper Format Rupiah
+const formatRp = (angka) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka);
+
+console.log("🤖 Bot Telegram Sambal Orek sudah berjalan (Mode Google Sheets)...");
+
+// ==========================================
+// FUNGSI UNTUK MENYIMPAN KE GOOGLE SHEETS
+// ==========================================
+async function simpanKeSpreadsheet(data) {
+    try {
+        // 1. Autentikasi dengan Service Account
+        const auth = new google.auth.GoogleAuth({
+            keyFile: './google-credentials.json', // Pastikan file ini ada
+            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+        });
+
+        const client = await auth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth: client });
+
+        // 2. ID Spreadsheet-mu
+        const spreadsheetId = SPREADSHEET_ID;
+
+        // 3. Tentukan letak nominal berdasarkan metode pembayaran (CASH/QRIS/TF)
+        const paymentModeStr = (data.payment_mode || "").toUpperCase();
+        let cash = paymentModeStr.includes('CASH') ? data.nett_profit : "";
+        let qris = paymentModeStr.includes('QRIS') ? data.nett_profit : "";
+        let tf = paymentModeStr.includes('TF') ? data.nett_profit : "";
+
+        // 4. Susun data persis seperti urutan kolom di sheet "REPORT"
+        const values = [
+            [
+                data.order_no || "-", // Kolom A: order no
+                data.no_nota || "-", // Kolom B: no. nota
+                data.order_date || "-", // Kolom C: order date
+                data.order_time || "-", // Kolom D: order time
+                data.kasir || "-", // Kolom E: kasir
+                data.nett_profit || 0, // Kolom F: nett profit
+                data.payment_mode || "-", // Kolom G: payment mode
+                cash, // Kolom H: CASH
+                qris, // Kolom I: QRIS
+                tf // Kolom J: TF/GOJEK
+            ]
+        ];
+
+        // 5. Append (suntikkan baris baru) ke bawah tabel di Sheet "REPORT"
+        await sheets.spreadsheets.values.append({
+            spreadsheetId,
+            range: 'REPORT!A:J',
+            valueInputOption: 'USER_ENTERED', // Menerapkan format angka dari Google Sheets
+            resource: { values },
+        });
+
+        return true; // Berhasil
+    } catch (error) {
+        console.error("❌ Error Google Sheets:", error);
+        return false; // Gagal
+    }
+}
+// ==========================================
+
+// COMMAND: /start
+bot.onText(/\/start/, (msg) => {
+    bot.sendMessage(msg.chat.id, "Halo! 👋 Saya adalah Bot Kasir Sambal Orek.\n\nKirimkan foto Nota Manual dan Struk Olsera, saya akan mengekstrak datanya dan menyimpannya ke Spreadsheet otomatis. \n\nKetik /report untuk melihat format laporan harian.");
+});
+
+// COMMAND: /report
+bot.onText(/\/report/, async (msg) => {
+    const chatId = msg.chat.id;
+    bot.sendMessage(chatId, "⏳ Menghitung laporan harian dari Spreadsheet...");
+
+    try {
+        // Autentikasi Google Sheets
+        const auth = new google.auth.GoogleAuth({
+            keyFile: './google-credentials.json',
+            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+        });
+        const client = await auth.getClient();
+        const sheets = google.sheets({ version: 'v4', auth: client });
+        const spreadsheetId = SPREADSHEET_ID;
+
+        // Ambil data dari sheet REPORT
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: 'REPORT!A:J',
+        });
+        const rows = response.data.values;
+
+        // Dapatkan tanggal hari ini (Format YYYY-MM-DD untuk dicocokkan)
+        const today = new Date();
+        const yyyy = today.getFullYear();
+        const mm = String(today.getMonth() + 1).padStart(2, '0');
+        const dd = String(today.getDate()).padStart(2, '0');
+        const todayStr = `${yyyy}-${mm}-${dd}`;
+
+        // Format tanggal untuk tampilan (MM/DD/YY)
+        const displayDate = `${mm}/${dd}/${String(yyyy).slice(-2)}`;
+
+        let totalCash = 0;
+        let totalQris = 0;
+        let totalTF = 0;
+
+        if (rows && rows.length > 0) {
+            // Looping data, mulai dari baris 1 (asumsi baris 0 adalah header)
+            for (let i = 1; i < rows.length; i++) {
+                const row = rows[i];
+                const orderDate = String(row[2] || ""); // Kolom C: order_date
+
+                if (orderDate.startsWith(todayStr) || orderDate.includes(todayStr)) {
+                    const paymentMode = (row[6] || "").toUpperCase(); // Kolom G
+                    const nettProfit = parseFloat((row[5] || "0").replace(/[^0-9.-]+/g, "")); // Kolom F
+
+                    if (paymentMode.includes('CASH')) {
+                        totalCash += nettProfit;
+                    } else if (paymentMode.includes('QRIS')) {
+                        totalQris += nettProfit;
+                    } else if (paymentMode.includes('TF') || paymentMode.includes('GOJEK')) {
+                        totalTF += nettProfit;
+                    }
+                }
+            }
+        }
+
+        let totalAll = totalCash + totalQris + totalTF;
+
+        const reportMessage = `
+*Laporan Harian:* ${displayDate}
+Cash \t\t${formatRp(totalCash)}
+Qris \t\t${formatRp(totalQris)}
+Total \t\t${formatRp(totalAll)}
+Brankas \t${formatRp(totalCash)}
+TF \t\t${formatRp(totalTF)}
+        `;
+
+        bot.sendMessage(chatId, reportMessage.trim(), { parse_mode: 'Markdown' });
+    } catch (error) {
+        console.error("❌ Error report:", error);
+        bot.sendMessage(chatId, "❌ Gagal membuat laporan dari Spreadsheet.");
+    }
+});
+
+// COMMAND: /export
+bot.onText(/\/export/, async (msg) => {
+    const chatId = msg.chat.id;
+    bot.sendMessage(chatId, "⏳ Sedang menyiapkan file PDF dan Excel Anda...");
+
+    try {
+        const auth = new google.auth.GoogleAuth({
+            keyFile: './google-credentials.json',
+            scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly', 'https://www.googleapis.com/auth/drive.readonly'],
+        });
+        
+        const client = await auth.getClient();
+        const tokenResp = await client.getAccessToken();
+        const token = tokenResp.token;
+
+        const dateStr = new Date().toISOString().split('T')[0];
+        
+        // 1. Download PDF
+        const pdfUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/export?format=pdf`;
+        const pdfRes = await fetch(pdfUrl, { headers: { 'Authorization': 'Bearer ' + token } });
+        if (!pdfRes.ok) throw new Error("Gagal mengunduh PDF");
+        const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
+        
+        await bot.sendDocument(chatId, pdfBuffer, 
+            { caption: '📄 Laporan Rekapan (PDF)' }, 
+            { filename: `Rekapan_${dateStr}.pdf`, contentType: 'application/pdf' }
+        );
+
+        // 2. Download Excel (XLSX)
+        const excelUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/export?format=xlsx`;
+        const excelRes = await fetch(excelUrl, { headers: { 'Authorization': 'Bearer ' + token } });
+        if (!excelRes.ok) throw new Error("Gagal mengunduh Excel");
+        const excelBuffer = Buffer.from(await excelRes.arrayBuffer());
+        
+        await bot.sendDocument(chatId, excelBuffer, 
+            { caption: '📊 Laporan Rekapan (Excel)' }, 
+            { filename: `Rekapan_${dateStr}.xlsx`, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+        );
+
+    } catch (error) {
+        console.error("Export Error:", error);
+        bot.sendMessage(chatId, "❌ Gagal mengunduh file laporan. Pastikan email bot memiliki akses Editor ke Spreadsheet.");
+    }
+});
+
+
+const mediaGroups = {};
+
+async function processPhotos(chatId, fileIds) {
+    try {
+        const imageParts = [];
+        for (const fileId of fileIds) {
+            const fileLink = await bot.getFileLink(fileId);
+            const imageResp = await fetch(fileLink);
+            const arrayBuffer = await imageResp.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            imageParts.push({
+                inlineData: {
+                    data: buffer.toString("base64"),
+                    mimeType: "image/jpeg"
+                }
+            });
+        }
+
+        const prompt = "Tolong ekstrak data dari nota/struk ini. Jika ada lebih dari 1 gambar (misal nota manual dan struk digital), GABUNGKAN datanya menjadi SATU data rekap utuh yang saling melengkapi.";
+        const result = await model.generateContent([prompt, ...imageParts]);
+        const aiResponse = result.response.text();
+
+        // Parse JSON dengan Regex agar lebih aman
+        let parsedData;
+        try {
+            const jsonMatch = aiResponse.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                parsedData = JSON.parse(jsonMatch[0]);
+            } else {
+                const cleanJson = aiResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+                parsedData = JSON.parse(cleanJson);
+            }
+        } catch (e) {
+            console.error("AI Response error:", aiResponse);
+            bot.sendMessage(chatId, "❌ AI memberikan format balasan yang salah.");
+            return;
+        }
+
+        const data = parsedData.data;
+
+        // Hapus angka 0 di depan no_nota (misal: "003940" -> "3940")
+        if (data && data.no_nota && typeof data.no_nota === 'string') {
+            data.no_nota = data.no_nota.replace(/^0+/, '');
+        }
+
+        if (parsedData.action === 'rekapan') {
+            bot.sendMessage(chatId, "⏳ Data terbaca, sedang menyimpan ke Google Sheets...");
+
+            // Panggil fungsi simpan
+            const isSaved = await simpanKeSpreadsheet(data);
+
+            const saveStatusMsg = isSaved ?
+                "\n_✅ Data berhasil disimpan ke Spreadsheet._" :
+                "\n_❌ Gagal menyimpan ke Spreadsheet._";
+
+            const reply = `*Hasil Pencocokan Nota*\n\n` +
+                `📅 Tanggal: ${data.order_date || '-'}\n` +
+                `⏰ Jam: ${data.order_time || '-'}\n` +
+                `👤 Kasir: ${data.kasir || '-'}\n` +
+                `🧾 No. Nota Manual: ${data.no_nota || '-'}\n` +
+                `📠 No. Order Olsera: ${data.order_no || '-'}\n` +
+                `💳 Metode: ${data.payment_mode || '-'}\n` +
+                `💰 Total: ${formatRp(data.nett_profit || 0)}\n\n` +
+                `📝 *Catatan AI:* Data diproses otomatis.` + saveStatusMsg;
+
+            bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
+        }
+    } catch (error) {
+        console.error("Error Processing Image(s):", error);
+        bot.sendMessage(chatId, "❌ Gagal memproses gambar. Pastikan tulisan pada nota terbaca dengan jelas.");
+    }
+}
+
+// MENANGANI KIRIMAN FOTO NOTA / STRUK DAN PERTANYAAN TEKS
+bot.on('message', async (msg) => {
+    const chatId = msg.chat.id;
+    if (msg.text && msg.text.startsWith('/')) return;
+
+    if (msg.photo) {
+        if (msg.media_group_id) {
+            if (!mediaGroups[msg.media_group_id]) {
+                mediaGroups[msg.media_group_id] = [];
+                bot.sendMessage(chatId, "📸 Menerima album foto, sedang menyatukan data nota...");
+
+                setTimeout(async () => {
+                    const fileIds = mediaGroups[msg.media_group_id];
+                    delete mediaGroups[msg.media_group_id];
+                    await processPhotos(chatId, fileIds);
+                }, 2500); // Tunggu 2.5 detik untuk mengumpulkan semua foto dalam album
+            }
+            mediaGroups[msg.media_group_id].push(msg.photo[msg.photo.length - 1].file_id);
+            return;
+        } else {
+            bot.sendMessage(chatId, "🔍 Membaca dan mencocokkan nota...");
+            await processPhotos(chatId, [msg.photo[msg.photo.length - 1].file_id]);
+        }
+    } else if (msg.text) {
+        bot.sendMessage(chatId, "🤔 Sedang membaca buku kas untuk mencari jawaban...");
+
+        try {
+            // Autentikasi Google Sheets
+            const auth = new google.auth.GoogleAuth({
+                keyFile: './google-credentials.json',
+                scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+            });
+            const client = await auth.getClient();
+            const sheets = google.sheets({ version: 'v4', auth: client });
+            const spreadsheetId = SPREADSHEET_ID;
+
+            // Ambil data dari sheet REPORT
+            const response = await sheets.spreadsheets.values.get({
+                spreadsheetId,
+                range: 'REPORT!A:J',
+            });
+            const rows = response.data.values;
+
+            // Konversi rows ke format teks tabel sederhana
+            let contextData = "Data kasir kosong.";
+            if (rows && rows.length > 0) {
+                // Mengirim SELURUH data tanpa dibatasi (sesuai permintaan user) agar AI bisa menganalisa semua tanggal
+                contextData = rows.map(row => row.join(' | ')).join('\n');
+            }
+
+            // Prompt untuk model AI
+            const prompt = `Berikut adalah data rekap penjualan (buku kas) warung Sambal Orek:\n\n${contextData}\n\nPertanyaan pengguna: ${msg.text}\n\nJawablah berdasarkan data di atas dengan singkat, jelas, dan ramah. Jika ada angka Rupiah, formatlah dengan rapi.`;
+
+            const result = await chatModel.generateContent(prompt);
+            let aiResponse = result.response.text();
+
+            // Sesuaikan format markdown Gemini (**) menjadi format Telegram (*)
+            aiResponse = aiResponse.replace(/\*\*/g, '*');
+
+            bot.sendMessage(chatId, aiResponse, { parse_mode: 'Markdown' });
+        } catch (error) {
+            console.error("Error Q&A:", error);
+            bot.sendMessage(chatId, "❌ Maaf, saya sedang kesulitan membaca buku kas saat ini.");
+        }
+    }
+});
+
+module.exports = bot;
