@@ -6,12 +6,12 @@ module.exports = async (req, res) => {
             // Meneruskan request dari Telegram ke sistem Bot kita
             bot.processUpdate(req.body);
             
-            // Vercel mematikan proses segera setelah res.send() dipanggil.
-            // Oleh karena itu, kita tunda balasannya selama 8 detik 
-            // agar bot punya cukup waktu untuk memanggil AI Gemini dan menyimpan ke Sheets.
-            setTimeout(() => {
-                res.status(200).send('OK');
-            }, 8000);
+            // Vercel mematikan proses segera setelah fungsi async ini selesai.
+            // Oleh karena itu, kita HARUS menahan eksekusi selama 8 detik 
+            // menggunakan promise agar bot punya cukup waktu untuk memanggil AI Gemini dan API Telegram.
+            await new Promise(resolve => setTimeout(resolve, 8000));
+            
+            res.status(200).send('OK');
         } else {
             res.status(200).send('Webhook Bot Telegram Sambal Orek Aktif! 🚀');
         }
