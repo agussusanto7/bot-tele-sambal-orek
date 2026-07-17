@@ -222,6 +222,67 @@ async function processPhotos(chatId, fileIds) {
     }
 }
 
+async function handleMediaGroup(chatId, mediaGroupId, fileId) {
+    const sheets = await getSheetsClient();
+    if (!sheets) {
+        await processPhotos(chatId, [fileId]);
+        return;
+    }
+    
+    try {
+        const res = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
+        const exists = res.data.sheets.some(s => s.properties.title === 'CACHE');
+        if (!exists) {
+            await sheets.spreadsheets.batchUpdate({
+                spreadsheetId: SPREADSHEET_ID,
+                resource: { requests: [{ addSheet: { properties: { title: 'CACHE' } } }] }
+            });
+        }
+    } catch (e) {
+        console.error("Error creating CACHE sheet:", e);
+    }
+    
+    try {
+        await sheets.spreadsheets.values.append({
+            spreadsheetId: SPREADSHEET_ID,
+            range: 'CACHE!A:B',
+            valueInputOption: 'USER_ENTERED',
+            resource: { values: [[mediaGroupId, fileId]] },
+        });
+    } catch (e) {
+        console.error("Error appending to CACHE:", e);
+        await processPhotos(chatId, [fileId]);
+        return;
+    }
+    
+    // Tunggu instance Vercel lain selesai melakukan append ke Sheet
+    await new Promise(resolve => setTimeout(resolve, 3500));
+    
+    try {
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range: 'CACHE!A:B',
+        });
+        const rows = response.data.values || [];
+        
+        const groupFiles = [];
+        for (const row of rows) {
+            if (row[0] === mediaGroupId) {
+                groupFiles.push(row[1]);
+            }
+        }
+        
+        // Cek apakah instance ini adalah "Leader" (yang pertama kali masuk)
+        if (groupFiles.length > 0 && groupFiles[0] === fileId) {
+            await bot.sendMessage(chatId, `📸 Menerima album foto (${groupFiles.length} lembar), sedang menyatukan data...`);
+            await processPhotos(chatId, groupFiles);
+        }
+    } catch (e) {
+        console.error("Error reading CACHE:", e);
+        await processPhotos(chatId, [fileId]);
+    }
+}
+
 // ==========================================
 // FUNGSI UTAMA UNTUK VERCEL SERVERLESS
 // ==========================================
@@ -353,26 +414,7 @@ TF \t\t${formatRp(totalTF)}`;
             }
 
             if (msg.media_group_id) {
-                if (!mediaGroups[msg.media_group_id]) {
-                    mediaGroups[msg.media_group_id] = [msg.photo[msg.photo.length - 1].file_id];
-                    
-                    // Kita buat delay sedikit, berharap Vercel menggunakan instance yang sama
-                    await new Promise(resolve => setTimeout(resolve, 2500));
-                    
-                    const fileIds = mediaGroups[msg.media_group_id];
-                    delete mediaGroups[msg.media_group_id];
-                    
-                    if (fileIds && fileIds.length > 0) {
-                        if (fileIds.length === 1) {
-                             await bot.sendMessage(chatId, "⚠️ Vercel memisah album ini. Jika ingin digabung, mohon kirim foto 1, lalu *REPLY* foto 1 tersebut dengan foto 2.");
-                        } else {
-                             await bot.sendMessage(chatId, "📸 Menerima album foto, menyatukan data...");
-                        }
-                        await processPhotos(chatId, fileIds);
-                    }
-                } else {
-                    mediaGroups[msg.media_group_id].push(msg.photo[msg.photo.length - 1].file_id);
-                }
+                await handleMediaGroup(chatId, msg.media_group_id, msg.photo[msg.photo.length - 1].file_id);
                 return res.status(200).send('OK');
             } else {
                 await bot.sendMessage(chatId, "🔍 Membaca dan mencocokkan nota...");
