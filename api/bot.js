@@ -34,7 +34,7 @@ function initializeGlobals() {
 
     let rawToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
     if (rawToken.startsWith('=')) rawToken = rawToken.substring(1).trim();
-    
+
     let rawApiKey = (process.env.GEMINI_API_KEY || '').trim();
     if (rawApiKey.startsWith('=')) rawApiKey = rawApiKey.substring(1).trim();
 
@@ -64,7 +64,7 @@ Jika ada 2 gambar (nota manual dan struk), gabungkan datanya (misal ambil no_not
     });
 
     chatModel = genAI.getGenerativeModel({
-        model: "gemini-1.5-flash",
+        model: "gemini-3.1-flash-lite",
         systemInstruction: "Kamu adalah asisten kasir warung 'Sambal Orek' yang ramah, sopan, dan sigap. Kamu akan menjawab pertanyaan pemilik terkait rekapan penjualan hari ini."
     });
 }
@@ -228,7 +228,7 @@ async function processPhotos(chatId, fileIds) {
 module.exports = async function handleUpdate(req, res) {
     if (req.method !== 'POST') {
         if (initError) {
-             return res.status(200).send(`Init Error: ${initError.message}\n\nPastikan Anda sudah menyetting TELEGRAM_BOT_TOKEN dan GEMINI_API_KEY di Vercel.`);
+            return res.status(200).send(`Init Error: ${initError.message}\n\nPastikan Anda sudah menyetting TELEGRAM_BOT_TOKEN dan GEMINI_API_KEY di Vercel.`);
         }
         const tokenDebug = process.env.TELEGRAM_BOT_TOKEN || '';
         return res.status(200).send('Webhook is running. Token length: ' + tokenDebug.length + ' Starts with: ' + tokenDebug.substring(0, 4));
@@ -270,22 +270,24 @@ module.exports = async function handleUpdate(req, res) {
                 await bot.sendMessage(chatId, "❌ Gagal mengontak Google Sheets.");
                 return res.status(200).send('OK');
             }
-            
+
             const response = await sheets.spreadsheets.values.get({
                 spreadsheetId: SPREADSHEET_ID,
                 range: 'REPORT!A:J',
             });
             const rows = response.data.values;
-            
+
             const today = new Date();
             const yyyy = today.getFullYear();
             const mm = String(today.getMonth() + 1).padStart(2, '0');
             const dd = String(today.getDate()).padStart(2, '0');
             const todayStr = `${yyyy}-${mm}-${dd}`;
             const displayDate = `${mm}/${dd}/${String(yyyy).slice(-2)}`;
-            
-            let totalCash = 0; let totalQris = 0; let totalTF = 0;
-            
+
+            let totalCash = 0;
+            let totalQris = 0;
+            let totalTF = 0;
+
             if (rows && rows.length > 0) {
                 for (let i = 1; i < rows.length; i++) {
                     const row = rows[i];
@@ -322,12 +324,12 @@ TF \t\t${formatRp(totalTF)}`;
                 const tokenResp = await client.getAccessToken();
                 const tokenVal = tokenResp.token;
                 const dateStr = new Date().toISOString().split('T')[0];
-                
+
                 const pdfUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/export?format=pdf`;
                 const pdfRes = await fetch(pdfUrl, { headers: { 'Authorization': 'Bearer ' + tokenVal } });
                 const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
                 await bot.sendDocument(chatId, pdfBuffer, { caption: '📄 Laporan Rekapan (PDF)' }, { filename: `Rekapan_${dateStr}.pdf`, contentType: 'application/pdf' });
-                
+
                 const excelUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/export?format=xlsx`;
                 const excelRes = await fetch(excelUrl, { headers: { 'Authorization': 'Bearer ' + tokenVal } });
                 const excelBuffer = Buffer.from(await excelRes.arrayBuffer());
@@ -345,12 +347,12 @@ TF \t\t${formatRp(totalTF)}`;
                 if (!mediaGroups[msg.media_group_id]) {
                     mediaGroups[msg.media_group_id] = [msg.photo[msg.photo.length - 1].file_id];
                     await bot.sendMessage(chatId, "📸 Menerima album foto, sedang menyatukan data nota...");
-                    
+
                     await new Promise(resolve => setTimeout(resolve, 2500));
-                    
+
                     const fileIds = mediaGroups[msg.media_group_id];
                     delete mediaGroups[msg.media_group_id];
-                    
+
                     if (fileIds && fileIds.length > 0) {
                         await processPhotos(chatId, fileIds);
                     }
@@ -363,8 +365,8 @@ TF \t\t${formatRp(totalTF)}`;
                 await processPhotos(chatId, [msg.photo[msg.photo.length - 1].file_id]);
                 return res.status(200).send('OK');
             }
-        } 
-        
+        }
+
         // TEKS / CHAT AI
         if (msg.text && !msg.text.startsWith('/')) {
             if (greetingPatterns.test(msg.text.trim())) {
@@ -380,7 +382,7 @@ TF \t\t${formatRp(totalTF)}`;
                     contextData = rows.map(row => row.join(' | ')).join('\n');
                 }
                 const prompt = `Berikut adalah data rekap penjualan (buku kas) warung Sambal Orek:\n\n${contextData}\n\nPesan pengguna: "${msg.text}"\n\nJika pesan pengguna menanyakan data, jawablah berdasarkan data di atas dengan singkat, jelas, dan ramah. Jika tidak ada data relevan, jawab saja bahwa tidak ada data untuk pertanyaan itu. Jika ada angka Rupiah, formatlah dengan rapi.`;
-                
+
                 const result = await chatModel.generateContent(prompt);
                 let aiResponse = result.response.text();
                 aiResponse = aiResponse.replace(/\*\*/g, '*');
