@@ -255,8 +255,9 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
         return;
     }
     
-    // Tunggu instance Vercel lain selesai melakukan append ke Sheet
-    await new Promise(resolve => setTimeout(resolve, 3500));
+    // Tunggu instance Vercel lain selesai melakukan append ke Sheet. 
+    // Kita set 8 detik karena kadang Vercel butuh waktu untuk "pemanasan" (Cold Start)
+    await new Promise(resolve => setTimeout(resolve, 8000));
     
     try {
         const response = await sheets.spreadsheets.values.get({
