@@ -255,31 +255,44 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
         return;
     }
     
-    // Tunggu instance Vercel lain selesai melakukan append ke Sheet. 
-    // Kita set 8 detik karena kadang Vercel butuh waktu untuk "pemanasan" (Cold Start)
-    await new Promise(resolve => setTimeout(resolve, 8000));
+    // Polling CACHE sheet hingga 4 kali (4 x 4 detik = 16 detik max)
+    // Telegram Media Group (Album) pasti berisi minimal 2 foto. 
+    // Kita tunggu sampai minimal ada 2 foto yang tercatat di CACHE.
+    let groupFiles = [];
+    
+    for (let attempt = 1; attempt <= 4; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 4000));
+        
+        try {
+            const response = await sheets.spreadsheets.values.get({
+                spreadsheetId: SPREADSHEET_ID,
+                range: 'CACHE!A:B',
+            });
+            const rows = response.data.values || [];
+            
+            groupFiles = [];
+            for (const row of rows) {
+                if (row[0] === mediaGroupId) {
+                    groupFiles.push(row[1]);
+                }
+            }
+            
+            if (groupFiles.length >= 2) {
+                break; // Sudah ada 2 foto atau lebih, keluar dari loop!
+            }
+        } catch (e) {
+            console.error("Error reading CACHE on attempt", attempt, e);
+        }
+    }
     
     try {
-        const response = await sheets.spreadsheets.values.get({
-            spreadsheetId: SPREADSHEET_ID,
-            range: 'CACHE!A:B',
-        });
-        const rows = response.data.values || [];
-        
-        const groupFiles = [];
-        for (const row of rows) {
-            if (row[0] === mediaGroupId) {
-                groupFiles.push(row[1]);
-            }
-        }
-        
         // Cek apakah instance ini adalah "Leader" (yang pertama kali masuk)
         if (groupFiles.length > 0 && groupFiles[0] === fileId) {
             await bot.sendMessage(chatId, `📸 Menerima album foto (${groupFiles.length} lembar), sedang menyatukan data...`);
             await processPhotos(chatId, groupFiles);
         }
     } catch (e) {
-        console.error("Error reading CACHE:", e);
+        console.error("Error processing CACHE:", e);
         await processPhotos(chatId, [fileId]);
     }
 }
