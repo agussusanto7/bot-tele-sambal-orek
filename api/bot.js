@@ -32,8 +32,11 @@ function initializeGlobals() {
         throw new Error("GEMINI_API_KEY belum disetting di Environment Variables Vercel.");
     }
 
-    const rawToken = process.env.TELEGRAM_BOT_TOKEN.trim();
-    const rawApiKey = process.env.GEMINI_API_KEY.trim();
+    let rawToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+    if (rawToken.startsWith('=')) rawToken = rawToken.substring(1).trim();
+    
+    let rawApiKey = (process.env.GEMINI_API_KEY || '').trim();
+    if (rawApiKey.startsWith('=')) rawApiKey = rawApiKey.substring(1).trim();
 
     bot = new TelegramBot(rawToken);
 
