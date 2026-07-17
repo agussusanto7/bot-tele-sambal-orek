@@ -13,7 +13,7 @@ module.exports = async (req, res) => {
             const startTime = Date.now();
 
             // Dispatch ke bot (sync, tidak menunggu selesai)
-            bot.handleUpdate(req.body);
+            bot.processUpdate(req.body);
 
             // Tahan function hidup sampai semua proses async bot selesai
             const waitUntilDone = new Promise((resolve) => {
