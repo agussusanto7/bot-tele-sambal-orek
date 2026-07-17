@@ -1,10 +1,45 @@
 const TelegramBot = require('node-telegram-bot-api');
 const { google } = require('googleapis');
-const { model, chatModel } = require('./ai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const path = require('path');
 
+// ==========================================
+// INISIALISASI AI
+// ==========================================
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+const model = genAI.getGenerativeModel({
+    model: "gemini-1.5-pro",
+    systemInstruction: `Kamu adalah asisten pengatur keuangan warung (Kasir) bernama Sambal Orek.
+Tugas utamamu adalah: Mengekstrak data dari nota kasir (baik manual maupun struk digital/Olsera).
+
+Wajib kembalikan format JSON murni TANPA markdown (\`\`\`json).
+Format JSON:
+{
+  "action": "rekapan",
+  "data": {
+    "order_date": "YYYY-MM-DD",
+    "order_time": "HH:MM",
+    "order_no": "nomor urut struk/order (jika ada)",
+    "no_nota": "nomor nota manual yang ditulis tangan (jika ada, tanpa 0 di depan)",
+    "kasir": "nama kasir",
+    "payment_mode": "CASH / QRIS / TF BUKOPIN / GOJEK / GRAB / dll",
+    "nett_profit": "total penjualan bersih (hanya angka)"
+  }
+}
+Jika ada 2 gambar (nota manual dan struk), gabungkan datanya (misal ambil no_nota dari gambar manual, dan order_no dari gambar struk).`
+});
+
+const chatModel = genAI.getGenerativeModel({
+    model: "gemini-1.5-flash",
+    systemInstruction: "Kamu adalah asisten kasir warung 'Sambal Orek' yang ramah, sopan, dan sigap. Kamu akan menjawab pertanyaan pemilik terkait rekapan penjualan hari ini."
+});
+
+// ==========================================
+// INISIALISASI BOT
+// ==========================================
 const token = process.env.TELEGRAM_BOT_TOKEN;
-const bot = new TelegramBot(token); // TANPA POLLING UNTUK VERCEL
+const bot = new TelegramBot(token); // TANPA POLLING
 
 const CREDENTIALS_PATH = path.resolve(__dirname, '..', 'google-credentials.json');
 const SPREADSHEET_ID = '1Wh_uT2o9_WP66JxJQC9mGf_Q1NjuOVP5tjBFXHNpZNM';
@@ -170,8 +205,16 @@ async function processPhotos(chatId, fileIds) {
 // ==========================================
 // FUNGSI UTAMA UNTUK VERCEL SERVERLESS
 // ==========================================
-async function handleUpdate(body) {
-    if (!body.message) return;
+module.exports = async function handleUpdate(req, res) {
+    if (req.method !== 'POST') {
+        return res.status(200).send('Webhook is running');
+    }
+
+    const body = req.body;
+    if (!body || !body.message) {
+        return res.status(200).send('OK');
+    }
+
     const msg = body.message;
     const chatId = msg.chat.id;
     const text = msg.text || msg.caption || '';
@@ -181,7 +224,7 @@ async function handleUpdate(body) {
         if (text.startsWith('/start')) {
             const welcomeMsg = `Halo! 👋 Selamat datang di *Bot Kasir Sambal Orek*.\n\nSaya di sini untuk membantu Anda merekap data harian secara otomatis ke Google Sheets.\n\n*📌 Fitur yang tersedia:*\n1️⃣ *Kirim Foto Nota* 📸\nKirimkan foto *Nota Manual* atau *Struk Olsera*. Anda juga bisa mengirim 2 foto sekaligus (album) untuk digabungkan datanya otomatis.\n\n2️⃣ */report* 📊\nUntuk melihat ringkasan pemasukan hari ini (Cash, QRIS, TF).\n\n3️⃣ */export* 📄\nUntuk mengunduh laporan lengkap dalam format *PDF* dan *Excel*.\n\n4️⃣ *Tanya AI* 🤖\nAnda bisa menanyakan langsung apa saja seputar data penjualan hari ini, misal: _"Berapa total pemasukan cash hari ini?"_\n\nKirimkan foto nota pertama Anda untuk mulai!`;
             await bot.sendMessage(chatId, welcomeMsg, { parse_mode: 'Markdown' });
-            return;
+            return res.status(200).send('OK');
         }
 
         // COMMAND: /report
@@ -190,7 +233,7 @@ async function handleUpdate(body) {
             const sheets = await getSheetsClient();
             if (!sheets) {
                 await bot.sendMessage(chatId, "❌ Gagal mengontak Google Sheets.");
-                return;
+                return res.status(200).send('OK');
             }
             
             const response = await sheets.spreadsheets.values.get({
@@ -230,7 +273,7 @@ Total \t\t${formatRp(totalAll)}
 Brankas \t${formatRp(totalCash)}
 TF \t\t${formatRp(totalTF)}`;
             await bot.sendMessage(chatId, reportMessage.trim(), { parse_mode: 'Markdown' });
-            return;
+            return res.status(200).send('OK');
         }
 
         // COMMAND: /export
@@ -258,7 +301,7 @@ TF \t\t${formatRp(totalTF)}`;
                 console.error("Export Error:", error);
                 await bot.sendMessage(chatId, "❌ Gagal mengunduh file laporan.");
             }
-            return;
+            return res.status(200).send('OK');
         }
 
         // FOTO
@@ -268,7 +311,6 @@ TF \t\t${formatRp(totalTF)}`;
                     mediaGroups[msg.media_group_id] = [msg.photo[msg.photo.length - 1].file_id];
                     await bot.sendMessage(chatId, "📸 Menerima album foto, sedang menyatukan data nota...");
                     
-                    // Tunggu 2.5 detik untuk Vercel mengumpulkan foto-foto lainnya (jika beruntung di instance yg sama)
                     await new Promise(resolve => setTimeout(resolve, 2500));
                     
                     const fileIds = mediaGroups[msg.media_group_id];
@@ -280,11 +322,11 @@ TF \t\t${formatRp(totalTF)}`;
                 } else {
                     mediaGroups[msg.media_group_id].push(msg.photo[msg.photo.length - 1].file_id);
                 }
-                return;
+                return res.status(200).send('OK');
             } else {
                 await bot.sendMessage(chatId, "🔍 Membaca dan mencocokkan nota...");
                 await processPhotos(chatId, [msg.photo[msg.photo.length - 1].file_id]);
-                return;
+                return res.status(200).send('OK');
             }
         } 
         
@@ -293,7 +335,7 @@ TF \t\t${formatRp(totalTF)}`;
             if (greetingPatterns.test(msg.text.trim())) {
                 const welcomeMsg = `Halo! 👋 Selamat datang di *Bot Kasir Sambal Orek*.\n\nSaya di sini untuk membantu Anda merekap data harian secara otomatis ke Google Sheets.\n\n*📌 Fitur yang tersedia:*\n1️⃣ *Kirim Foto Nota* 📸\nKirimkan foto *Nota Manual* atau *Struk Olsera*. Anda juga bisa mengirim 2 foto sekaligus (album) untuk digabungkan datanya otomatis.\n\n2️⃣ */report* 📊\nUntuk melihat ringkasan pemasukan hari ini (Cash, QRIS, TF).\n\n3️⃣ */export* 📄\nUntuk mengunduh laporan lengkap dalam format *PDF* dan *Excel*.\n\n4️⃣ *Tanya AI* 🤖\nAnda bisa menanyakan langsung apa saja seputar data penjualan hari ini, misal: _"Berapa total pemasukan cash hari ini?"_\n\nKirimkan foto nota pertama Anda untuk mulai!`;
                 await bot.sendMessage(chatId, welcomeMsg, { parse_mode: 'Markdown' });
-                return;
+                return res.status(200).send('OK');
             }
 
             try {
@@ -320,11 +362,12 @@ TF \t\t${formatRp(totalTF)}`;
                     await bot.sendMessage(chatId, "❌ Maaf, terjadi kesalahan. Detail: " + fallbackError.message);
                 }
             }
+            return res.status(200).send('OK');
         }
 
+        res.status(200).send('OK');
     } catch (err) {
         console.error("Unhandled message error:", err);
+        res.status(500).send('Error');
     }
-}
-
-module.exports = { handleUpdate };
+};

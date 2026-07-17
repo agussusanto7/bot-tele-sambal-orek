@@ -11,7 +11,7 @@ if (!webhookUrl) {
     process.exit(1);
 }
 
-const fullUrl = webhookUrl.endsWith('/api/webhook') ? webhookUrl : `${webhookUrl}/api/webhook`;
+const fullUrl = webhookUrl.endsWith('/api/bot') ? webhookUrl : `${webhookUrl}/api/bot`;
 
 bot.setWebHook(fullUrl).then(() => {
     console.log(`✅ Webhook berhasil dipasang ke: ${fullUrl}`);
