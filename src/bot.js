@@ -382,7 +382,7 @@ bot.on('message', async (msg) => {
                     bot.sendMessage(chatId, aiResponse, { parse_mode: 'Markdown' });
                 } catch (fallbackError) {
                     console.error("Fallback AI error:", fallbackError.message);
-                    bot.sendMessage(chatId, "❌ Maaf, terjadi kesalahan. Silakan coba lagi nanti.");
+                    bot.sendMessage(chatId, "❌ Maaf, terjadi kesalahan. Detail: " + fallbackError.message);
                 }
             }
         }
