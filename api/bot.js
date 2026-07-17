@@ -227,7 +227,8 @@ module.exports = async function handleUpdate(req, res) {
         if (initError) {
              return res.status(200).send(`Init Error: ${initError.message}\n\nPastikan Anda sudah menyetting TELEGRAM_BOT_TOKEN dan GEMINI_API_KEY di Vercel.`);
         }
-        return res.status(200).send('Webhook is running');
+        const tokenDebug = process.env.TELEGRAM_BOT_TOKEN || '';
+        return res.status(200).send('Webhook is running. Token length: ' + tokenDebug.length + ' Starts with: ' + tokenDebug.substring(0, 4));
     }
 
     try {
