@@ -32,9 +32,12 @@ function initializeGlobals() {
         throw new Error("GEMINI_API_KEY belum disetting di Environment Variables Vercel.");
     }
 
-    bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
+    const rawToken = process.env.TELEGRAM_BOT_TOKEN.trim();
+    const rawApiKey = process.env.GEMINI_API_KEY.trim();
 
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    bot = new TelegramBot(rawToken);
+
+    const genAI = new GoogleGenerativeAI(rawApiKey);
     model = genAI.getGenerativeModel({
         model: "gemini-1.5-pro",
         systemInstruction: `Kamu adalah asisten pengatur keuangan warung (Kasir) bernama Sambal Orek.
