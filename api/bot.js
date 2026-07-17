@@ -409,7 +409,7 @@ TF \t\t${formatRp(totalTF)}`;
         if (bot && req.body && req.body.message && req.body.message.chat) {
             try {
                 await bot.sendMessage(req.body.message.chat.id, "❌ Terjadi Error Fatal di Vercel: \n" + err.message);
-            } catch (e) {}
+            } catch (e) { }
         }
         res.status(500).send('Error: ' + err.message + '\n' + err.stack);
     }
