@@ -3,14 +3,41 @@ const { google } = require('googleapis');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const path = require('path');
 
-// ==========================================
-// INISIALISASI AI
-// ==========================================
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+let bot = null;
+let model = null;
+let chatModel = null;
+let initError = null;
 
-const model = genAI.getGenerativeModel({
-    model: "gemini-1.5-pro",
-    systemInstruction: `Kamu adalah asisten pengatur keuangan warung (Kasir) bernama Sambal Orek.
+const CREDENTIALS_PATH = path.resolve(__dirname, '..', 'google-credentials.json');
+const SPREADSHEET_ID = '1Wh_uT2o9_WP66JxJQC9mGf_Q1NjuOVP5tjBFXHNpZNM';
+const greetingPatterns = /^(hai|halo|hello|hi|hey|test|ping|pagi|siang|sore|malam|assalamualaikum|woi|prabowo|tes|cd|cde|hidelo|helooo?)$/i;
+const mediaGroups = {};
+
+const formatRp = (angka) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka);
+
+function getGoogleAuthOptions(scopes) {
+    if (process.env.GOOGLE_CREDENTIALS) {
+        return { credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS), scopes };
+    }
+    return { keyFile: CREDENTIALS_PATH, scopes };
+}
+
+function initializeGlobals() {
+    if (bot && model && chatModel) return;
+
+    if (!process.env.TELEGRAM_BOT_TOKEN) {
+        throw new Error("TELEGRAM_BOT_TOKEN belum disetting di Environment Variables Vercel.");
+    }
+    if (!process.env.GEMINI_API_KEY) {
+        throw new Error("GEMINI_API_KEY belum disetting di Environment Variables Vercel.");
+    }
+
+    bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN);
+
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    model = genAI.getGenerativeModel({
+        model: "gemini-1.5-pro",
+        systemInstruction: `Kamu adalah asisten pengatur keuangan warung (Kasir) bernama Sambal Orek.
 Tugas utamamu adalah: Mengekstrak data dari nota kasir (baik manual maupun struk digital/Olsera).
 
 Wajib kembalikan format JSON murni TANPA markdown (\`\`\`json).
@@ -28,30 +55,21 @@ Format JSON:
   }
 }
 Jika ada 2 gambar (nota manual dan struk), gabungkan datanya (misal ambil no_nota dari gambar manual, dan order_no dari gambar struk).`
-});
+    });
 
-const chatModel = genAI.getGenerativeModel({
-    model: "gemini-1.5-flash",
-    systemInstruction: "Kamu adalah asisten kasir warung 'Sambal Orek' yang ramah, sopan, dan sigap. Kamu akan menjawab pertanyaan pemilik terkait rekapan penjualan hari ini."
-});
-
-// ==========================================
-// INISIALISASI BOT
-// ==========================================
-const token = process.env.TELEGRAM_BOT_TOKEN;
-const bot = new TelegramBot(token); // TANPA POLLING
-
-const CREDENTIALS_PATH = path.resolve(__dirname, '..', 'google-credentials.json');
-const SPREADSHEET_ID = '1Wh_uT2o9_WP66JxJQC9mGf_Q1NjuOVP5tjBFXHNpZNM';
-
-function getGoogleAuthOptions(scopes) {
-    if (process.env.GOOGLE_CREDENTIALS) {
-        return { credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS), scopes };
-    }
-    return { keyFile: CREDENTIALS_PATH, scopes };
+    chatModel = genAI.getGenerativeModel({
+        model: "gemini-1.5-flash",
+        systemInstruction: "Kamu adalah asisten kasir warung 'Sambal Orek' yang ramah, sopan, dan sigap. Kamu akan menjawab pertanyaan pemilik terkait rekapan penjualan hari ini."
+    });
 }
 
-const formatRp = (angka) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka);
+// Coba inisialisasi awal, tapi tangkap errornya
+try {
+    initializeGlobals();
+} catch (err) {
+    initError = err;
+}
+
 
 async function getSheetsClient() {
     try {
@@ -81,8 +99,6 @@ async function fetchSheetData() {
         return null;
     }
 }
-
-const greetingPatterns = /^(hai|halo|hello|hi|hey|test|ping|pagi|siang|sore|malam|assalamualaikum|woi|prabowo|tes|cd|cde|hidelo|helooo?)$/i;
 
 async function simpanKeSpreadsheet(data) {
     try {
@@ -127,8 +143,6 @@ async function simpanKeSpreadsheet(data) {
         return false;
     }
 }
-
-const mediaGroups = {};
 
 async function processPhotos(chatId, fileIds) {
     try {
@@ -207,19 +221,33 @@ async function processPhotos(chatId, fileIds) {
 // ==========================================
 module.exports = async function handleUpdate(req, res) {
     if (req.method !== 'POST') {
+        if (initError) {
+             return res.status(200).send(`Init Error: ${initError.message}\n\nPastikan Anda sudah menyetting TELEGRAM_BOT_TOKEN dan GEMINI_API_KEY di Vercel.`);
+        }
         return res.status(200).send('Webhook is running');
     }
 
-    const body = req.body;
-    if (!body || !body.message) {
-        return res.status(200).send('OK');
-    }
-
-    const msg = body.message;
-    const chatId = msg.chat.id;
-    const text = msg.text || msg.caption || '';
-
     try {
+        // Coba init ulang jika sebelumnya gagal, karena request ini mungkin di Vercel yg sudah disetting env-nya
+        if (initError || !bot) {
+            try {
+                initializeGlobals();
+                initError = null; // berhasil init
+            } catch (retryErr) {
+                // Return 200 supaya Telegram tidak retry terus-terusan
+                return res.status(200).send(`Bot gagal menyala: ${retryErr.message}`);
+            }
+        }
+
+        const body = req.body;
+        if (!body || !body.message) {
+            return res.status(200).send('OK');
+        }
+
+        const msg = body.message;
+        const chatId = msg.chat.id;
+        const text = msg.text || msg.caption || '';
+
         // COMMAND: /start
         if (text.startsWith('/start')) {
             const welcomeMsg = `Halo! 👋 Selamat datang di *Bot Kasir Sambal Orek*.\n\nSaya di sini untuk membantu Anda merekap data harian secara otomatis ke Google Sheets.\n\n*📌 Fitur yang tersedia:*\n1️⃣ *Kirim Foto Nota* 📸\nKirimkan foto *Nota Manual* atau *Struk Olsera*. Anda juga bisa mengirim 2 foto sekaligus (album) untuk digabungkan datanya otomatis.\n\n2️⃣ */report* 📊\nUntuk melihat ringkasan pemasukan hari ini (Cash, QRIS, TF).\n\n3️⃣ */export* 📄\nUntuk mengunduh laporan lengkap dalam format *PDF* dan *Excel*.\n\n4️⃣ *Tanya AI* 🤖\nAnda bisa menanyakan langsung apa saja seputar data penjualan hari ini, misal: _"Berapa total pemasukan cash hari ini?"_\n\nKirimkan foto nota pertama Anda untuk mulai!`;
@@ -368,6 +396,12 @@ TF \t\t${formatRp(totalTF)}`;
         res.status(200).send('OK');
     } catch (err) {
         console.error("Unhandled message error:", err);
-        res.status(500).send('Error');
+        // Mengirim error message kembali ke Telegram jika memungkinkan
+        if (bot && req.body && req.body.message && req.body.message.chat) {
+            try {
+                await bot.sendMessage(req.body.message.chat.id, "❌ Terjadi Error Fatal di Vercel: \n" + err.message);
+            } catch (e) {}
+        }
+        res.status(500).send('Error: ' + err.message + '\n' + err.stack);
     }
 };
