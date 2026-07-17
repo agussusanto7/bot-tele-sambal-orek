@@ -13,6 +13,14 @@ const CREDENTIALS_PATH = path.resolve(__dirname, '..', 'google-credentials.json'
 // Masukkan ID Spreadsheet Anda di sini
 const SPREADSHEET_ID = '1Wh_uT2o9_WP66JxJQC9mGf_Q1NjuOVP5tjBFXHNpZNM';
 
+// Fungsi helper untuk mendukung Environment Variable di Vercel
+function getGoogleAuthOptions(scopes) {
+    if (process.env.GOOGLE_CREDENTIALS) {
+        return { credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS), scopes };
+    }
+    return { keyFile: CREDENTIALS_PATH, scopes };
+}
+
 // Helper Format Rupiah
 const formatRp = (angka) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka);
 
@@ -39,10 +47,9 @@ bot.getActiveCount = () => activeProcesses;
 // ==========================================
 async function getSheetsClient() {
     try {
-        const auth = new google.auth.GoogleAuth({
-            keyFile: CREDENTIALS_PATH,
-            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-        });
+        const auth = new google.auth.GoogleAuth(
+            getGoogleAuthOptions(['https://www.googleapis.com/auth/spreadsheets'])
+        );
         const client = await auth.getClient();
         return google.sheets({ version: 'v4', auth: client });
     } catch (error) {
@@ -77,10 +84,9 @@ const greetingPatterns = /^(hai|halo|hello|hi|hey|test|ping|pagi|siang|sore|mala
 // ==========================================
 async function simpanKeSpreadsheet(data) {
     try {
-        const auth = new google.auth.GoogleAuth({
-            keyFile: CREDENTIALS_PATH,
-            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-        });
+        const auth = new google.auth.GoogleAuth(
+            getGoogleAuthOptions(['https://www.googleapis.com/auth/spreadsheets'])
+        );
 
         const client = await auth.getClient();
         const sheets = google.sheets({ version: 'v4', auth: client });
@@ -191,10 +197,9 @@ bot.onText(/\/export/, async (msg) => {
     bot.sendMessage(chatId, "⏳ Sedang menyiapkan file PDF dan Excel Anda...");
 
     try {
-        const auth = new google.auth.GoogleAuth({
-            keyFile: CREDENTIALS_PATH,
-            scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly', 'https://www.googleapis.com/auth/drive.readonly'],
-        });
+        const auth = new google.auth.GoogleAuth(
+            getGoogleAuthOptions(['https://www.googleapis.com/auth/spreadsheets.readonly', 'https://www.googleapis.com/auth/drive.readonly'])
+        );
 
         const client = await auth.getClient();
         const tokenResp = await client.getAccessToken();
