@@ -1,28 +1,21 @@
 require('dotenv').config();
+const TelegramBot = require('node-telegram-bot-api');
 
-const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-let VERCEL_URL = process.argv[2]; // url passed from terminal
+const token = process.env.TELEGRAM_BOT_TOKEN;
+const bot = new TelegramBot(token);
 
-if (VERCEL_URL && VERCEL_URL.endsWith('/')) {
-    VERCEL_URL = VERCEL_URL.slice(0, -1);
-}
+const webhookUrl = process.argv[2];
 
-if (!VERCEL_URL) {
-    console.error("❌ ERROR: Masukkan URL Vercel Anda!");
-    console.log("Contoh: node set-webhook.js https://bot-saya.vercel.app");
+if (!webhookUrl) {
+    console.error("❌ Masukkan URL webhook. Contoh: node set-webhook.js https://namabot.vercel.app");
     process.exit(1);
 }
 
-const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/setWebhook?url=${VERCEL_URL}/api/webhook`;
+const fullUrl = webhookUrl.endsWith('/api/webhook') ? webhookUrl : `${webhookUrl}/api/webhook`;
 
-fetch(url)
-    .then(res => res.json())
-    .then(data => {
-        if (data.ok) {
-            console.log("✅ Webhook berhasil dipasang ke:", VERCEL_URL);
-            console.log("✅ Bot Anda sekarang berjalan di server Vercel!");
-        } else {
-            console.error("❌ Gagal memasang webhook:", data);
-        }
-    })
-    .catch(err => console.error("❌ Error:", err));
+bot.setWebHook(fullUrl).then(() => {
+    console.log(`✅ Webhook berhasil dipasang ke: ${fullUrl}`);
+    console.log("✅ Bot Anda sekarang berjalan di server Vercel!");
+}).catch(err => {
+    console.error("❌ Gagal memasang webhook:", err.message);
+});
