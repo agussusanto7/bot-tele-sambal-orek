@@ -52,7 +52,7 @@ Format JSON:
   "action": "rekapan",
   "data": {
     "order_date": "YYYY-MM-DD",
-    "order_time": "HH:MM",
+    "order_time": "HH:MM:SS",
     "order_no": "nomor urut struk/order (jika ada)",
     "no_nota": "nomor nota manual yang ditulis tangan (jika ada, tanpa 0 di depan)",
     "kasir": "nama kasir",
