@@ -128,13 +128,16 @@ async function simpanKeSpreadsheet(data) {
 
 // COMMAND: /start
 bot.onText(/\/start/, (msg) => {
-    bot.sendMessage(msg.chat.id, "Halo! 👋 Saya adalah Bot Kasir Sambal Orek.\n\nKirimkan foto Nota Manual dan Struk Olsera, saya akan mengekstrak datanya dan menyimpannya ke Spreadsheet otomatis. \n\nKetik /report untuk melihat format laporan harian.");
+    trackProcess((async () => {
+        await bot.sendMessage(msg.chat.id, "Halo! 👋 Saya adalah Bot Kasir Sambal Orek.\n\nKirimkan foto Nota Manual dan Struk Olsera, saya akan mengekstrak datanya dan menyimpannya ke Spreadsheet otomatis. \n\nKetik /report untuk melihat format laporan harian.");
+    })());
 });
 
 // COMMAND: /report
-bot.onText(/\/report/, async (msg) => {
-    const chatId = msg.chat.id;
-    bot.sendMessage(chatId, "⏳ Menghitung laporan harian dari Spreadsheet...");
+bot.onText(/\/report/, (msg) => {
+    trackProcess((async () => {
+        const chatId = msg.chat.id;
+        await bot.sendMessage(chatId, "⏳ Menghitung laporan harian dari Spreadsheet...");
 
     try {
         const sheets = await getSheetsClient();
@@ -184,17 +187,19 @@ Brankas \t${formatRp(totalCash)}
 TF \t\t${formatRp(totalTF)}
         `;
 
-        bot.sendMessage(chatId, reportMessage.trim(), { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, reportMessage.trim(), { parse_mode: 'Markdown' });
     } catch (error) {
         console.error("❌ Error report:", error);
-        bot.sendMessage(chatId, "❌ Gagal membuat laporan dari Spreadsheet.");
+        await bot.sendMessage(chatId, "❌ Gagal membuat laporan dari Spreadsheet.");
     }
+    })());
 });
 
 // COMMAND: /export
-bot.onText(/\/export/, async (msg) => {
-    const chatId = msg.chat.id;
-    bot.sendMessage(chatId, "⏳ Sedang menyiapkan file PDF dan Excel Anda...");
+bot.onText(/\/export/, (msg) => {
+    trackProcess((async () => {
+        const chatId = msg.chat.id;
+        await bot.sendMessage(chatId, "⏳ Sedang menyiapkan file PDF dan Excel Anda...");
 
     try {
         const auth = new google.auth.GoogleAuth(
@@ -231,8 +236,9 @@ bot.onText(/\/export/, async (msg) => {
 
     } catch (error) {
         console.error("Export Error:", error);
-        bot.sendMessage(chatId, "❌ Gagal mengunduh file laporan. Pastikan email bot memiliki akses Editor ke Spreadsheet.");
+        await bot.sendMessage(chatId, "❌ Gagal mengunduh file laporan. Pastikan email bot memiliki akses Editor ke Spreadsheet.");
     }
+    })());
 });
 
 
@@ -270,7 +276,7 @@ async function processPhotos(chatId, fileIds) {
             }
         } catch (e) {
             console.error("AI Response error:", aiResponse);
-            bot.sendMessage(chatId, "❌ AI memberikan format balasan yang salah.");
+            await bot.sendMessage(chatId, "❌ AI memberikan format balasan yang salah.");
             return;
         }
 
@@ -282,7 +288,7 @@ async function processPhotos(chatId, fileIds) {
         }
 
         if (parsedData.action === 'rekapan') {
-            bot.sendMessage(chatId, "⏳ Data terbaca, sedang menyimpan ke Google Sheets...");
+            await bot.sendMessage(chatId, "⏳ Data terbaca, sedang menyimpan ke Google Sheets...");
 
             const isSaved = await simpanKeSpreadsheet(data);
 
@@ -300,14 +306,14 @@ async function processPhotos(chatId, fileIds) {
                 `💰 Total: ${formatRp(data.nett_profit || 0)}\n\n` +
                 `📝 *Catatan AI:* Data diproses otomatis.` + saveStatusMsg;
 
-            bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
+            await bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
         }
     } catch (error) {
         console.error("Error Processing Image(s):", error);
         if (error.message && (error.message.toLowerCase().includes('gemini') || error.message.toLowerCase().includes('google'))) {
-            bot.sendMessage(chatId, "❌ Server Gemini Error: API AI sedang bermasalah atau tidak tersambung. Detail: " + error.message);
+            await bot.sendMessage(chatId, "❌ Server Gemini Error: API AI sedang bermasalah atau tidak tersambung. Detail: " + error.message);
         } else {
-            bot.sendMessage(chatId, "❌ Gagal memproses gambar. Pastikan tulisan pada nota terbaca dengan jelas. Detail: " + error.message);
+            await bot.sendMessage(chatId, "❌ Gagal memproses gambar. Pastikan tulisan pada nota terbaca dengan jelas. Detail: " + error.message);
         }
     }
 }
@@ -325,11 +331,14 @@ bot.on('message', async (msg) => {
                     mediaGroups[msg.media_group_id] = [];
                     bot.sendMessage(chatId, "📸 Menerima album foto, sedang menyatukan data nota...");
 
-                    setTimeout(async () => {
-                        const fileIds = mediaGroups[msg.media_group_id];
-                        delete mediaGroups[msg.media_group_id];
-                        await processPhotos(chatId, fileIds);
-                    }, 2500);
+                    trackProcess(new Promise(resolve => {
+                        setTimeout(async () => {
+                            const fileIds = mediaGroups[msg.media_group_id];
+                            delete mediaGroups[msg.media_group_id];
+                            await processPhotos(chatId, fileIds);
+                            resolve();
+                        }, 2500);
+                    }));
                 }
                 mediaGroups[msg.media_group_id].push(msg.photo[msg.photo.length - 1].file_id);
                 return;
@@ -341,16 +350,16 @@ bot.on('message', async (msg) => {
         } else if (msg.text) {
             // 1. Cek apakah ini sapaan — jawab langsung tanpa Sheets
             if (greetingPatterns.test(msg.text.trim())) {
-                bot.sendMessage(chatId, "🤔 Sedang membaca buku kas untuk mencari jawaban...");
+                await bot.sendMessage(chatId, "🤔 Sedang membaca buku kas untuk mencari jawaban...");
                 try {
                     const prompt = `Pesan pengguna: "${msg.text}". Ini adalah sapaan. Balaslah dengan ramah dan tawarkan bantuan terkait Warung Sambal Orek (bisa tanya laporan, rekapan, dll). Gunakan format Markdown dengan emoji. Maksimum 3 kalimat.`;
                     const result = await chatModel.generateContent(prompt);
                     let aiResponse = result.response.text();
                     aiResponse = aiResponse.replace(/\*\*/g, '*');
-                    bot.sendMessage(chatId, aiResponse.trim(), { parse_mode: 'Markdown' });
+                    await bot.sendMessage(chatId, aiResponse.trim(), { parse_mode: 'Markdown' });
                 } catch (error) {
                     console.error("AI greeting error:", error.message);
-                    bot.sendMessage(chatId, "Halo! 👋 Selamat datang di Bot Kasir Sambal Orek. Ada yang bisa saya bantu?");
+                    await bot.sendMessage(chatId, "Halo! 👋 Selamat datang di Bot Kasir Sambal Orek. Ada yang bisa saya bantu?");
                 }
                 return;
             }
@@ -370,7 +379,7 @@ bot.on('message', async (msg) => {
 
                 aiResponse = aiResponse.replace(/\*\*/g, '*');
 
-                bot.sendMessage(chatId, aiResponse, { parse_mode: 'Markdown' });
+                await bot.sendMessage(chatId, aiResponse, { parse_mode: 'Markdown' });
             } catch (error) {
                 console.error("Error Q&A:", error.message);
                 // Fallback: tetap coba AI tanpa data sheets
@@ -379,10 +388,10 @@ bot.on('message', async (msg) => {
                     const result = await chatModel.generateContent(prompt);
                     let aiResponse = result.response.text();
                     aiResponse = aiResponse.replace(/\*\*/g, '*');
-                    bot.sendMessage(chatId, aiResponse, { parse_mode: 'Markdown' });
+                    await bot.sendMessage(chatId, aiResponse, { parse_mode: 'Markdown' });
                 } catch (fallbackError) {
                     console.error("Fallback AI error:", fallbackError.message);
-                    bot.sendMessage(chatId, "❌ Maaf, terjadi kesalahan. Detail: " + fallbackError.message);
+                    await bot.sendMessage(chatId, "❌ Maaf, terjadi kesalahan. Detail: " + fallbackError.message);
                 }
             }
         }
