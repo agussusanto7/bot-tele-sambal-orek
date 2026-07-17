@@ -255,45 +255,37 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
         return;
     }
     
-    // Polling CACHE sheet hingga 4 kali (4 x 4 detik = 16 detik max)
-    // Telegram Media Group (Album) pasti berisi minimal 2 foto. 
-    // Kita tunggu sampai minimal ada 2 foto yang tercatat di CACHE.
+    // Cek ada berapa foto dalam album ini di CACHE
     let groupFiles = [];
-    
-    for (let attempt = 1; attempt <= 4; attempt++) {
-        await new Promise(resolve => setTimeout(resolve, 4000));
-        
-        try {
-            const response = await sheets.spreadsheets.values.get({
-                spreadsheetId: SPREADSHEET_ID,
-                range: 'CACHE!A:B',
-            });
-            const rows = response.data.values || [];
-            
-            groupFiles = [];
-            for (const row of rows) {
-                if (row[0] === mediaGroupId) {
-                    groupFiles.push(row[1]);
-                }
-            }
-            
-            if (groupFiles.length >= 2) {
-                break; // Sudah ada 2 foto atau lebih, keluar dari loop!
-            }
-        } catch (e) {
-            console.error("Error reading CACHE on attempt", attempt, e);
-        }
-    }
-    
     try {
-        // Cek apakah instance ini adalah "Leader" (yang pertama kali masuk)
-        if (groupFiles.length > 0 && groupFiles[0] === fileId) {
-            await bot.sendMessage(chatId, `📸 Menerima album foto (${groupFiles.length} lembar), sedang menyatukan data...`);
-            await processPhotos(chatId, groupFiles);
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range: 'CACHE!A:B',
+        });
+        const rows = response.data.values || [];
+        
+        for (const row of rows) {
+            if (row[0] === mediaGroupId) {
+                groupFiles.push(row[1]);
+            }
         }
     } catch (e) {
-        console.error("Error processing CACHE:", e);
+        console.error("Error reading CACHE:", e);
         await processPhotos(chatId, [fileId]);
+        return;
+    }
+    
+    // Logika Trigger Vercel-Telegram:
+    // Telegram mengirim album satu per satu. 
+    // Foto 1 masuk -> CACHE = 1 -> Jangan diproses dulu (kembalikan OK agar Telegram mengirim Foto 2)
+    // Foto 2 masuk -> CACHE = 2 -> KEDUA foto diproses bersamaan!
+    if (groupFiles.length === 1) {
+        await bot.sendMessage(chatId, "📸 Menerima album foto 1/2, menunggu foto selanjutnya...");
+        // Selesai di sini. Vercel mati, Telegram akan mengirim foto kedua.
+    } else if (groupFiles.length >= 2) {
+        await bot.sendMessage(chatId, `📸 Menerima album lengkap (${groupFiles.length} lembar), sedang menyatukan data...`);
+        // Karena ini foto kedua/terakhir, kita proses semua foto dalam album!
+        await processPhotos(chatId, groupFiles);
     }
 }
 
