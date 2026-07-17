@@ -42,7 +42,7 @@ function initializeGlobals() {
 
     const genAI = new GoogleGenerativeAI(rawApiKey);
     model = genAI.getGenerativeModel({
-        model: "gemini-1.5-pro",
+        model: "gemini-3.1-flash-lite",
         systemInstruction: `Kamu adalah asisten pengatur keuangan warung (Kasir) bernama Sambal Orek.
 Tugas utamamu adalah: Mengekstrak data dari nota kasir (baik manual maupun struk digital/Olsera).
 
