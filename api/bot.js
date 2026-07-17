@@ -343,17 +343,31 @@ TF \t\t${formatRp(totalTF)}`;
 
         // FOTO
         if (msg.photo) {
+            // SOLUSI VERCEL: Jika user membalas (reply) foto sebelumnya dengan foto baru
+            if (msg.reply_to_message && msg.reply_to_message.photo) {
+                await bot.sendMessage(chatId, "📸 Membaca 2 foto sekaligus (dari reply)...");
+                const fileId1 = msg.reply_to_message.photo[msg.reply_to_message.photo.length - 1].file_id;
+                const fileId2 = msg.photo[msg.photo.length - 1].file_id;
+                await processPhotos(chatId, [fileId1, fileId2]);
+                return res.status(200).send('OK');
+            }
+
             if (msg.media_group_id) {
                 if (!mediaGroups[msg.media_group_id]) {
                     mediaGroups[msg.media_group_id] = [msg.photo[msg.photo.length - 1].file_id];
-                    await bot.sendMessage(chatId, "📸 Menerima album foto, sedang menyatukan data nota...");
-
+                    
+                    // Kita buat delay sedikit, berharap Vercel menggunakan instance yang sama
                     await new Promise(resolve => setTimeout(resolve, 2500));
-
+                    
                     const fileIds = mediaGroups[msg.media_group_id];
                     delete mediaGroups[msg.media_group_id];
-
+                    
                     if (fileIds && fileIds.length > 0) {
+                        if (fileIds.length === 1) {
+                             await bot.sendMessage(chatId, "⚠️ Vercel memisah album ini. Jika ingin digabung, mohon kirim foto 1, lalu *REPLY* foto 1 tersebut dengan foto 2.");
+                        } else {
+                             await bot.sendMessage(chatId, "📸 Menerima album foto, menyatukan data...");
+                        }
                         await processPhotos(chatId, fileIds);
                     }
                 } else {
