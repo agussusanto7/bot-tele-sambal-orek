@@ -9,7 +9,6 @@ let chatModel = null;
 let initError = null;
 
 const CREDENTIALS_PATH = path.resolve(__dirname, '..', 'google-credentials.json');
-const SPREADSHEET_ID = '1Wh_uT2o9_WP66JxJQC9mGf_Q1NjuOVP5tjBFXHNpZNM';
 const greetingPatterns = /^(hai|halo|hello|hi|hey|test|ping|pagi|siang|sore|malam|assalamualaikum|woi|prabowo|tes|cd|cde|hidelo|helooo?)$/i;
 const mediaGroups = {};
 
@@ -96,47 +95,35 @@ async function getDailySpreadsheetId(chatId = null) {
     const services = await getGoogleServices();
     if (!services) return null;
     const { sheets, drive } = services;
-    const masterId = SPREADSHEET_ID;
-
-    try {
-        const res = await sheets.spreadsheets.get({ spreadsheetId: masterId });
-        const exists = res.data.sheets.some(s => s.properties.title === 'DAILY_FILES');
-        if (!exists) {
-            await sheets.spreadsheets.batchUpdate({
-                spreadsheetId: masterId,
-                resource: { requests: [{ addSheet: { properties: { title: 'DAILY_FILES' } } }] }
-            });
-        }
-    } catch (e) {
-        console.error("Error with DAILY_FILES sheet:", e);
-        return masterId;
-    }
 
     const today = new Date();
     const yyyy = today.getFullYear();
     const mm = String(today.getMonth() + 1).padStart(2, '0');
     const dd = String(today.getDate()).padStart(2, '0');
     const todayStr = `${yyyy}-${mm}-${dd}`;
+    const expectedName = `Rekapan Sambal Orek - ${todayStr}`;
     
+    // Search in Google Drive for today's spreadsheet
     try {
-        const response = await sheets.spreadsheets.values.get({
-            spreadsheetId: masterId,
-            range: 'DAILY_FILES!A:B',
+        const res = await drive.files.list({
+            q: `name = '${expectedName}' and trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet'`,
+            fields: 'files(id, name)',
+            spaces: 'drive'
         });
-        const rows = response.data.values || [];
-        for (const row of rows) {
-            if (row[0] === todayStr) {
-                return row[1];
-            }
+        
+        if (res.data.files && res.data.files.length > 0) {
+            // Found it!
+            return res.data.files[0].id;
         }
     } catch (e) {
-        console.error("Error reading DAILY_FILES:", e);
+        console.error("Error searching drive:", e);
     }
 
+    // If not found, create new spreadsheet
     try {
         const newSpreadsheet = await sheets.spreadsheets.create({
             resource: {
-                properties: { title: `Rekapan Sambal Orek - ${todayStr}` },
+                properties: { title: expectedName },
                 sheets: [{ properties: { title: 'REPORT' } }]
             }
         });
@@ -156,13 +143,6 @@ async function getDailySpreadsheetId(chatId = null) {
             }
         });
 
-        await sheets.spreadsheets.values.append({
-            spreadsheetId: masterId,
-            range: 'DAILY_FILES!A:B',
-            valueInputOption: 'USER_ENTERED',
-            resource: { values: [[todayStr, newId]] },
-        });
-
         if (chatId) {
             await bot.sendMessage(chatId, `📄 *File Excel Baru Dibuat*\n\nTanggal: ${todayStr}\nLink: https://docs.google.com/spreadsheets/d/${newId}`, { parse_mode: 'Markdown' });
         }
@@ -170,7 +150,7 @@ async function getDailySpreadsheetId(chatId = null) {
         return newId;
     } catch (e) {
         console.error("Error creating daily spreadsheet:", e);
-        return masterId;
+        return null;
     }
 }
 
@@ -198,8 +178,11 @@ async function simpanKeSpreadsheet(data, chatId = null) {
         if (!services) return false;
         
         const sheets = services.sheets;
-        const dailyId = await getDailySpreadsheetId(chatId);
-        const spreadsheetId = dailyId || SPREADSHEET_ID;
+        const spreadsheetId = await getDailySpreadsheetId(chatId);
+        if (!spreadsheetId) {
+            console.error("No spreadsheet available.");
+            return false;
+        }
 
         const paymentModeStr = (data.payment_mode || "").toUpperCase();
         let cash = paymentModeStr.includes('CASH') ? data.nett_profit : "";
@@ -334,18 +317,24 @@ async function processPhotos(chatId, fileIds) {
 }
 
 async function handleMediaGroup(chatId, mediaGroupId, fileId) {
-    const sheets = await getSheetsClient();
-    if (!sheets) {
+    const services = await getGoogleServices();
+    if (!services) {
+        await processPhotos(chatId, [fileId]);
+        return;
+    }
+    const { sheets } = services;
+    const dailyId = await getDailySpreadsheetId(chatId);
+    if (!dailyId) {
         await processPhotos(chatId, [fileId]);
         return;
     }
     
     try {
-        const res = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
+        const res = await sheets.spreadsheets.get({ spreadsheetId: dailyId });
         const exists = res.data.sheets.some(s => s.properties.title === 'CACHE');
         if (!exists) {
             await sheets.spreadsheets.batchUpdate({
-                spreadsheetId: SPREADSHEET_ID,
+                spreadsheetId: dailyId,
                 resource: { requests: [{ addSheet: { properties: { title: 'CACHE' } } }] }
             });
         }
@@ -355,7 +344,7 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
     
     try {
         await sheets.spreadsheets.values.append({
-            spreadsheetId: SPREADSHEET_ID,
+            spreadsheetId: dailyId,
             range: 'CACHE!A:B',
             valueInputOption: 'USER_ENTERED',
             resource: { values: [[mediaGroupId, fileId]] },
@@ -370,7 +359,7 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
     let groupFiles = [];
     try {
         const response = await sheets.spreadsheets.values.get({
-            spreadsheetId: SPREADSHEET_ID,
+            spreadsheetId: dailyId,
             range: 'CACHE!A:B',
         });
         const rows = response.data.values || [];
