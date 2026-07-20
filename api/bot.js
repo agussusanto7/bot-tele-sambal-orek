@@ -177,9 +177,11 @@ PENTING:
                 const isSaved = await simpanKeFirestore(data);
                 if (isSaved) {
                     reply += `✅ **Data Berhasil Disimpan!**\n` +
-                        `📅 ${data.order_date || '-'} ⏰ ${data.order_time || '-'}\n` +
+                        `📅 Tanggal: ${data.order_date || '-'}\n` +
+                        `⏰ Jam: ${data.order_time || '-'}\n` +
                         `👤 Kasir: ${data.kasir || '-'}\n` +
-                        `🧾 Nota: ${data.no_nota || '-'} | 📠 Order: ${data.order_no || '-'}\n` +
+                        `🧾 Nota: ${data.no_nota || '-'}\n` +
+                        `📠 Order: ${data.order_no || '-'}\n` +
                         `💳 ${data.payment_mode || '-'} - 💰 ${formatRp(parseRupiah(data.nett_profit))}`;
                 } else {
                     reply += `❌ **Gagal Menyimpan Data**\nSilakan coba lagi.`;
@@ -199,9 +201,11 @@ PENTING:
                     const saveStatusMsg = isSaved ? "✅ Tersimpan" : "❌ Gagal";
 
                     reply += `**Data ${i + 1}** [${saveStatusMsg}]\n` +
-                        `📅 ${data.order_date || '-'} ⏰ ${data.order_time || '-'}\n` +
+                        `📅 Tanggal: ${data.order_date || '-'}\n` +
+                        `⏰ Jam: ${data.order_time || '-'}\n` +
                         `👤 Kasir: ${data.kasir || '-'}\n` +
-                        `🧾 Nota: ${data.no_nota || '-'} | 📠 Order: ${data.order_no || '-'}\n` +
+                        `🧾 Nota: ${data.no_nota || '-'}\n` +
+                        `📠 Order: ${data.order_no || '-'}\n` +
                         `💳 ${data.payment_mode || '-'} - 💰 ${formatRp(parseRupiah(data.nett_profit))}\n\n`;
                 }
                 reply += `📝 *Berhasil menyimpan ${successCount} dari ${dataArray.length} transaksi.*`;
