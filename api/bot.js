@@ -40,17 +40,19 @@ Wajib kembalikan format JSON murni TANPA markdown (\`\`\`json).
 Format JSON:
 {
   "action": "rekapan",
-  "data": {
-    "order_date": "YYYY-MM-DD",
-    "order_time": "HH:MM:SS",
-    "order_no": "nomor urut struk/order (jika ada)",
-    "no_nota": "nomor nota manual yang ditulis tangan (jika ada, tanpa 0 di depan)",
-    "kasir": "nama kasir",
-    "payment_mode": "CASH / QRIS / TF BUKOPIN / GOJEK / GRAB / dll",
-    "nett_profit": "total penjualan bersih (hanya angka)"
-  }
+  "data": [
+    {
+      "order_date": "YYYY-MM-DD",
+      "order_time": "HH:MM:SS",
+      "order_no": "nomor urut struk/order (jika ada)",
+      "no_nota": "nomor nota manual yang ditulis tangan (jika ada, tanpa 0 di depan)",
+      "kasir": "nama kasir",
+      "payment_mode": "CASH / QRIS / TF BUKOPIN / GOJEK / GRAB / dll",
+      "nett_profit": "total penjualan bersih (hanya angka)"
+    }
+  ]
 }
-Jika ada 2 gambar (nota manual dan struk), gabungkan datanya (misal ambil no_nota dari gambar manual, dan order_no dari gambar struk).`
+Jika foto-foto tersebut adalah pasangan nota manual & struk digital dari pesanan yang sama, gabungkan jadi 1 objek. Jika dari pesanan berbeda, pisahkan jadi beberapa objek dalam array.`
     });
 
     chatModel = genAI.getGenerativeModel({
@@ -131,7 +133,11 @@ async function processPhotos(chatId, fileIds) {
             });
         }
 
-        const prompt = "Tolong ekstrak data dari nota/struk ini. Jika ada lebih dari 1 gambar (misal nota manual dan struk digital), GABUNGKAN datanya menjadi SATU data rekap utuh yang saling melengkapi.";
+        const prompt = `Tolong ekstrak data dari kumpulan foto nota/struk ini.
+PENTING:
+- Jika ada nota manual dan struk digital untuk TRANSAKSI YANG SAMA, GABUNGKAN datanya menjadi 1 transaksi utuh.
+- Jika ada foto untuk TRANSAKSI YANG BERBEDA, pisahkan menjadi transaksi yang berbeda.
+- Kembalikan hasilnya selalu dalam bentuk ARRAY dari objek transaksi.`;
         const result = await model.generateContent([prompt, ...imageParts]);
         const aiResponse = result.response.text();
 
@@ -150,31 +156,36 @@ async function processPhotos(chatId, fileIds) {
             return;
         }
 
-        const data = parsedData.data;
-
-        if (data && data.no_nota && typeof data.no_nota === 'string') {
-            data.no_nota = data.no_nota.replace(/^0+/, '');
+        let dataArray = parsedData.data;
+        if (!Array.isArray(dataArray)) {
+            dataArray = [dataArray];
         }
 
         if (parsedData.action === 'rekapan') {
-            await bot.sendMessage(chatId, "⏳ Data terbaca, sedang menyimpan ke Database Firebase...");
+            await bot.sendMessage(chatId, `⏳ Data terbaca (${dataArray.length} transaksi), sedang menyimpan ke Database Firebase...`);
 
-            const isSaved = await simpanKeFirestore(data);
+            let successCount = 0;
+            let reply = `*Hasil Pencocokan Nota*\n\n`;
 
-            const saveStatusMsg = isSaved ?
-                "\n_✅ Data berhasil disimpan ke Database._" :
-                "\n_❌ Gagal menyimpan ke Database._";
+            for (let i = 0; i < dataArray.length; i++) {
+                let data = dataArray[i];
+                if (data && data.no_nota && typeof data.no_nota === 'string') {
+                    data.no_nota = data.no_nota.replace(/^0+/, '');
+                }
 
-            const reply = `*Hasil Pencocokan Nota*\n\n` +
-                `📅 Tanggal: ${data.order_date || '-'}\n` +
-                `⏰ Jam: ${data.order_time || '-'}\n` +
-                `👤 Kasir: ${data.kasir || '-'}\n` +
-                `🧾 No. Nota Manual: ${data.no_nota || '-'}\n` +
-                `📠 No. Order Olsera: ${data.order_no || '-'}\n` +
-                `💳 Metode: ${data.payment_mode || '-'}\n` +
-                `💰 Total: ${formatRp(parseRupiah(data.nett_profit))}\n\n` +
-                `📝 *Catatan AI:* Data diproses otomatis.` + saveStatusMsg;
+                const isSaved = await simpanKeFirestore(data);
+                if (isSaved) successCount++;
 
+                const saveStatusMsg = isSaved ? "✅ Tersimpan" : "❌ Gagal";
+
+                reply += `**Transaksi ${i + 1}** [${saveStatusMsg}]\n` +
+                    `📅 ${data.order_date || '-'} ⏰ ${data.order_time || '-'}\n` +
+                    `👤 Kasir: ${data.kasir || '-'}\n` +
+                    `🧾 Nota: ${data.no_nota || '-'} | 📠 Order: ${data.order_no || '-'}\n` +
+                    `💳 ${data.payment_mode || '-'} - 💰 ${formatRp(parseRupiah(data.nett_profit))}\n\n`;
+            }
+
+            reply += `📝 *Catatan AI:* Berhasil menyimpan ${successCount} dari ${dataArray.length} transaksi.`;
             await bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
         }
     } catch (error) {
@@ -196,25 +207,34 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
     try {
         const docRef = db.collection('media_cache').doc(mediaGroupId);
         const doc = await docRef.get();
-        let groupFiles = [];
-        if (doc.exists) {
-            groupFiles = doc.data().files || [];
-        }
         
-        groupFiles.push(fileId);
-        
-        await docRef.set({ 
-            files: groupFiles, 
-            updatedAt: FieldValue.serverTimestamp() 
-        }, { merge: true });
+        if (!doc.exists) {
+            // Ini adalah foto pertama dari album
+            await docRef.set({ 
+                files: [fileId], 
+                updatedAt: FieldValue.serverTimestamp() 
+            });
 
-        if (groupFiles.length === 1) {
-            await bot.sendMessage(chatId, "📸 Menerima album foto 1/2, menunggu foto selanjutnya...");
-        } else if (groupFiles.length >= 2) {
-            await bot.sendMessage(chatId, `📸 Menerima album lengkap (${groupFiles.length} lembar), sedang menyatukan data...`);
+            await bot.sendMessage(chatId, "📸 Menerima album foto, sedang mengumpulkan data (tunggu ±5 detik)...");
+            
+            // Tunggu 5 detik agar Vercel menerima webhook foto-foto lainnya
+            await new Promise(r => setTimeout(r, 5000));
+            
+            // Ambil data terbaru setelah menunggu
+            const finalDoc = await docRef.get();
+            const groupFiles = finalDoc.data().files;
+            
+            await bot.sendMessage(chatId, `📸 Memproses total ${groupFiles.length} foto sekaligus...`);
             await processPhotos(chatId, groupFiles);
-            // Cleanup cache
+            
+            // Bersihkan cache
             await docRef.delete();
+        } else {
+            // Ini adalah foto ke-2, ke-3, dst. Cukup tambahkan ke array dan selesai.
+            await docRef.update({
+                files: FieldValue.arrayUnion(fileId),
+                updatedAt: FieldValue.serverTimestamp()
+            });
         }
     } catch (e) {
         console.error("MediaGroup Error:", e);
