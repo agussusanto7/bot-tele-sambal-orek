@@ -332,14 +332,50 @@ TF \t\t${formatRp(totalTF)}`;
                 const rows = [['Order No', 'No Nota', 'Tanggal', 'Jam', 'Kasir', 'Nett Profit', 'Payment Mode', 'CASH', 'QRIS', 'TF']];
                 
                 docsData.forEach(data => {
+                    const formatUang = (val) => {
+                        const num = Number(val) || 0;
+                        return num === 0 ? "" : `Rp ${num.toLocaleString('id-ID')}`;
+                    };
+
                     rows.push([
-                        data.order_no, data.no_nota, data.order_date, data.order_time, data.kasir,
-                        data.nett_profit, data.payment_mode, data.cash, data.qris, data.tf
+                        data.order_no || "", 
+                        data.no_nota || "", 
+                        data.order_date || "", 
+                        data.order_time || "", 
+                        data.kasir || "",
+                        formatUang(data.nett_profit), 
+                        data.payment_mode || "", 
+                        formatUang(data.cash), 
+                        formatUang(data.qris), 
+                        formatUang(data.tf)
                     ]);
                 });
 
                 const wb = xlsx.utils.book_new();
                 const ws = xlsx.utils.aoa_to_sheet(rows);
+                
+                // Atur Lebar Kolom (Presisi)
+                ws['!cols'] = [
+                    {wch: 25}, // Order No
+                    {wch: 15}, // No Nota
+                    {wch: 12}, // Tanggal
+                    {wch: 10}, // Jam
+                    {wch: 22}, // Kasir
+                    {wch: 18}, // Nett Profit
+                    {wch: 15}, // Payment Mode
+                    {wch: 18}, // CASH
+                    {wch: 18}, // QRIS
+                    {wch: 18}  // TF
+                ];
+
+                // Tambahkan style bold (didukung oleh beberapa software Excel)
+                for (let c = 0; c < 10; c++) {
+                    const cellRef = xlsx.utils.encode_cell({r: 0, c: c});
+                    if (ws[cellRef]) {
+                        ws[cellRef].s = { font: { bold: true } };
+                    }
+                }
+
                 xlsx.utils.book_append_sheet(wb, ws, "REPORT");
                 
                 const excelBuffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
