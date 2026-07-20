@@ -206,15 +206,22 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
     
     try {
         const docRef = db.collection('media_cache').doc(mediaGroupId);
-        const doc = await docRef.get();
         
-        if (!doc.exists) {
-            // Ini adalah foto pertama dari album
-            await docRef.set({ 
+        let isFirst = false;
+        try {
+            // Gunakan create() untuk menghindari race condition
+            // Jika sukses, ini adalah foto pertama
+            await docRef.create({ 
                 files: [fileId], 
                 updatedAt: FieldValue.serverTimestamp() 
             });
-
+            isFirst = true;
+        } catch (err) {
+            // Jika gagal karena dokumen sudah ada (ALREADY_EXISTS)
+            isFirst = false;
+        }
+        
+        if (isFirst) {
             await bot.sendMessage(chatId, "📸 Menerima album foto, sedang mengumpulkan data (tunggu ±5 detik)...");
             
             // Tunggu 5 detik agar Vercel menerima webhook foto-foto lainnya
@@ -222,7 +229,7 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
             
             // Ambil data terbaru setelah menunggu
             const finalDoc = await docRef.get();
-            const groupFiles = finalDoc.data().files;
+            const groupFiles = finalDoc.data().files || [];
             
             await bot.sendMessage(chatId, `📸 Memproses total ${groupFiles.length} foto sekaligus...`);
             await processPhotos(chatId, groupFiles);
