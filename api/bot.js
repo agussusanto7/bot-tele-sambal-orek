@@ -165,27 +165,46 @@ PENTING:
             await bot.sendMessage(chatId, `⏳ Data terbaca (${dataArray.length} transaksi), sedang menyimpan ke Database Firebase...`);
 
             let successCount = 0;
-            let reply = `*Hasil Pencocokan Nota*\n\n`;
+            let reply = "";
 
-            for (let i = 0; i < dataArray.length; i++) {
-                let data = dataArray[i];
+            if (dataArray.length === 1) {
+                // Formatting khusus untuk 1 transaksi (Lebih luwes, tanpa nomor urut)
+                let data = dataArray[0];
                 if (data && data.no_nota && typeof data.no_nota === 'string') {
                     data.no_nota = data.no_nota.replace(/^0+/, '');
                 }
 
                 const isSaved = await simpanKeFirestore(data);
-                if (isSaved) successCount++;
+                if (isSaved) {
+                    reply += `✅ **Data Berhasil Disimpan!**\n` +
+                        `👤 Kasir: ${data.kasir || '-'}\n` +
+                        `🧾 Nota: ${data.no_nota || '-'} | 📠 Order: ${data.order_no || '-'}\n` +
+                        `💳 ${data.payment_mode || '-'} - 💰 ${formatRp(parseRupiah(data.nett_profit))}`;
+                } else {
+                    reply += `❌ **Gagal Menyimpan Data**\nSilakan coba lagi.`;
+                }
+            } else {
+                // Formatting untuk banyak transaksi (Batch)
+                reply = `*Hasil Rekap (${dataArray.length} Data)*\n\n`;
+                for (let i = 0; i < dataArray.length; i++) {
+                    let data = dataArray[i];
+                    if (data && data.no_nota && typeof data.no_nota === 'string') {
+                        data.no_nota = data.no_nota.replace(/^0+/, '');
+                    }
 
-                const saveStatusMsg = isSaved ? "✅ Tersimpan" : "❌ Gagal";
+                    const isSaved = await simpanKeFirestore(data);
+                    if (isSaved) successCount++;
 
-                reply += `**Transaksi ${i + 1}** [${saveStatusMsg}]\n` +
-                    `📅 ${data.order_date || '-'} ⏰ ${data.order_time || '-'}\n` +
-                    `👤 Kasir: ${data.kasir || '-'}\n` +
-                    `🧾 Nota: ${data.no_nota || '-'} | 📠 Order: ${data.order_no || '-'}\n` +
-                    `💳 ${data.payment_mode || '-'} - 💰 ${formatRp(parseRupiah(data.nett_profit))}\n\n`;
+                    const saveStatusMsg = isSaved ? "✅ Tersimpan" : "❌ Gagal";
+
+                    reply += `**Data ${i + 1}** [${saveStatusMsg}]\n` +
+                        `👤 Kasir: ${data.kasir || '-'}\n` +
+                        `🧾 Nota: ${data.no_nota || '-'} | 📠 Order: ${data.order_no || '-'}\n` +
+                        `💳 ${data.payment_mode || '-'} - 💰 ${formatRp(parseRupiah(data.nett_profit))}\n\n`;
+                }
+                reply += `📝 *Berhasil menyimpan ${successCount} dari ${dataArray.length} transaksi.*`;
             }
 
-            reply += `📝 *Catatan AI:* Berhasil menyimpan ${successCount} dari ${dataArray.length} transaksi.`;
             await bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
         }
     } catch (error) {
