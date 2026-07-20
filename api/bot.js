@@ -208,18 +208,22 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
         const docRef = db.collection('media_cache').doc(mediaGroupId);
         
         let isFirst = false;
-        try {
-            // Gunakan create() untuk menghindari race condition
-            // Jika sukses, ini adalah foto pertama
-            await docRef.create({ 
-                files: [fileId], 
-                updatedAt: FieldValue.serverTimestamp() 
-            });
-            isFirst = true;
-        } catch (err) {
-            // Jika gagal karena dokumen sudah ada (ALREADY_EXISTS)
-            isFirst = false;
-        }
+        await db.runTransaction(async (t) => {
+            const doc = await t.get(docRef);
+            if (!doc.exists) {
+                t.set(docRef, { 
+                    files: [fileId], 
+                    updatedAt: FieldValue.serverTimestamp() 
+                });
+                isFirst = true;
+            } else {
+                t.update(docRef, {
+                    files: FieldValue.arrayUnion(fileId),
+                    updatedAt: FieldValue.serverTimestamp()
+                });
+                isFirst = false;
+            }
+        });
         
         if (isFirst) {
             await bot.sendMessage(chatId, "📸 Menerima album foto, sedang mengumpulkan data (tunggu ±5 detik)...");
@@ -237,11 +241,8 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
             // Bersihkan cache
             await docRef.delete();
         } else {
-            // Ini adalah foto ke-2, ke-3, dst. Cukup tambahkan ke array dan selesai.
-            await docRef.update({
-                files: FieldValue.arrayUnion(fileId),
-                updatedAt: FieldValue.serverTimestamp()
-            });
+            // Foto ke-2, 3, dst sudah ditambahkan ke array di dalam transaction di atas.
+            // Tidak perlu melakukan apa-apa lagi.
         }
     } catch (e) {
         console.error("MediaGroup Error:", e);
