@@ -226,14 +226,31 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
         });
         
         if (isFirst) {
-            await bot.sendMessage(chatId, "📸 Menerima album foto, sedang menunggu semua foto masuk (tunggu ±15 detik)...");
+            await bot.sendMessage(chatId, "📸 Menerima album foto... sedang mengumpulkan (bot akan memproses otomatis setelah foto terakhir masuk)...");
             
-            // Tunggu 15 detik agar Vercel menerima webhook foto-foto lainnya (berguna jika koneksi upload lambat)
-            await new Promise(r => setTimeout(r, 15000));
+            let groupFiles = [];
+            let lastLength = 1;
+            let unchangedCount = 0;
             
-            // Ambil data terbaru setelah menunggu
-            const finalDoc = await docRef.get();
-            const groupFiles = finalDoc.data().files || [];
+            // Polling maksimal 20 detik
+            for (let i = 0; i < 20; i++) {
+                await new Promise(r => setTimeout(r, 1000));
+                const currentDoc = await docRef.get();
+                if (!currentDoc.exists) break;
+                
+                groupFiles = currentDoc.data().files || [];
+                if (groupFiles.length > lastLength) {
+                    lastLength = groupFiles.length;
+                    unchangedCount = 0; // Reset jika ada foto baru masuk
+                } else {
+                    unchangedCount++;
+                }
+                
+                // Jika sudah 3 detik berturut-turut tidak ada tambahan foto, anggap album selesai!
+                if (unchangedCount >= 3) {
+                    break;
+                }
+            }
             
             await bot.sendMessage(chatId, `📸 Memproses total ${groupFiles.length} foto sekaligus...`);
             await processPhotos(chatId, groupFiles);
@@ -246,6 +263,9 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
         }
     } catch (e) {
         console.error("MediaGroup Error:", e);
+        try {
+            await bot.sendMessage(chatId, `⚠️ Debug Error (MediaGroup): ${e.message}`);
+        } catch (err) {}
         await processPhotos(chatId, [fileId]);
     }
 }
