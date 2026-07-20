@@ -77,26 +77,112 @@ try {
 }
 
 
-async function getSheetsClient() {
+async function getGoogleServices() {
     try {
         const auth = new google.auth.GoogleAuth(
-            getGoogleAuthOptions(['https://www.googleapis.com/auth/spreadsheets'])
+            getGoogleAuthOptions(['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/drive.file'])
         );
         const client = await auth.getClient();
-        return google.sheets({ version: 'v4', auth: client });
+        const sheets = google.sheets({ version: 'v4', auth: client });
+        const drive = google.drive({ version: 'v3', auth: client });
+        return { sheets, drive, client };
     } catch (error) {
-        console.error("Sheets auth error:", error.message);
+        console.error("Auth error:", error.message);
         return null;
     }
 }
 
-async function fetchSheetData() {
-    const sheets = await getSheetsClient();
-    if (!sheets) return null;
+async function getDailySpreadsheetId(chatId = null) {
+    const services = await getGoogleServices();
+    if (!services) return null;
+    const { sheets, drive } = services;
+    const masterId = SPREADSHEET_ID;
 
     try {
+        const res = await sheets.spreadsheets.get({ spreadsheetId: masterId });
+        const exists = res.data.sheets.some(s => s.properties.title === 'DAILY_FILES');
+        if (!exists) {
+            await sheets.spreadsheets.batchUpdate({
+                spreadsheetId: masterId,
+                resource: { requests: [{ addSheet: { properties: { title: 'DAILY_FILES' } } }] }
+            });
+        }
+    } catch (e) {
+        console.error("Error with DAILY_FILES sheet:", e);
+        return masterId;
+    }
+
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    const todayStr = `${yyyy}-${mm}-${dd}`;
+    
+    try {
         const response = await sheets.spreadsheets.values.get({
-            spreadsheetId: SPREADSHEET_ID,
+            spreadsheetId: masterId,
+            range: 'DAILY_FILES!A:B',
+        });
+        const rows = response.data.values || [];
+        for (const row of rows) {
+            if (row[0] === todayStr) {
+                return row[1];
+            }
+        }
+    } catch (e) {
+        console.error("Error reading DAILY_FILES:", e);
+    }
+
+    try {
+        const newSpreadsheet = await sheets.spreadsheets.create({
+            resource: {
+                properties: { title: `Rekapan Sambal Orek - ${todayStr}` },
+                sheets: [{ properties: { title: 'REPORT' } }]
+            }
+        });
+        const newId = newSpreadsheet.data.spreadsheetId;
+
+        await drive.permissions.create({
+            fileId: newId,
+            resource: { type: 'anyone', role: 'writer' }
+        });
+
+        await sheets.spreadsheets.values.update({
+            spreadsheetId: newId,
+            range: 'REPORT!A1:J1',
+            valueInputOption: 'USER_ENTERED',
+            resource: {
+                values: [['Order No', 'No Nota', 'Tanggal', 'Jam', 'Kasir', 'Nett Profit', 'Payment Mode', 'CASH', 'QRIS', 'TF']]
+            }
+        });
+
+        await sheets.spreadsheets.values.append({
+            spreadsheetId: masterId,
+            range: 'DAILY_FILES!A:B',
+            valueInputOption: 'USER_ENTERED',
+            resource: { values: [[todayStr, newId]] },
+        });
+
+        if (chatId) {
+            await bot.sendMessage(chatId, `📄 *File Excel Baru Dibuat*\n\nTanggal: ${todayStr}\nLink: https://docs.google.com/spreadsheets/d/${newId}`, { parse_mode: 'Markdown' });
+        }
+
+        return newId;
+    } catch (e) {
+        console.error("Error creating daily spreadsheet:", e);
+        return masterId;
+    }
+}
+
+async function fetchSheetData(chatId = null) {
+    const services = await getGoogleServices();
+    if (!services) return null;
+    const dailyId = await getDailySpreadsheetId(chatId);
+    if (!dailyId) return null;
+
+    try {
+        const response = await services.sheets.spreadsheets.values.get({
+            spreadsheetId: dailyId,
             range: 'REPORT!A:J',
         });
         return response.data.values;
@@ -106,15 +192,14 @@ async function fetchSheetData() {
     }
 }
 
-async function simpanKeSpreadsheet(data) {
+async function simpanKeSpreadsheet(data, chatId = null) {
     try {
-        const auth = new google.auth.GoogleAuth(
-            getGoogleAuthOptions(['https://www.googleapis.com/auth/spreadsheets'])
-        );
-
-        const client = await auth.getClient();
-        const sheets = google.sheets({ version: 'v4', auth: client });
-        const spreadsheetId = SPREADSHEET_ID;
+        const services = await getGoogleServices();
+        if (!services) return false;
+        
+        const sheets = services.sheets;
+        const dailyId = await getDailySpreadsheetId(chatId);
+        const spreadsheetId = dailyId || SPREADSHEET_ID;
 
         const paymentModeStr = (data.payment_mode || "").toUpperCase();
         let cash = paymentModeStr.includes('CASH') ? data.nett_profit : "";
@@ -136,9 +221,35 @@ async function simpanKeSpreadsheet(data) {
             ]
         ];
 
-        await sheets.spreadsheets.values.append({
+        // Dapatkan Sheet ID untuk sheet 'REPORT'
+        const spreadsheetInfo = await sheets.spreadsheets.get({ spreadsheetId });
+        const sheet = spreadsheetInfo.data.sheets.find(s => s.properties.title === 'REPORT');
+        const sheetId = sheet ? sheet.properties.sheetId : 0;
+
+        // Insert baris baru di posisi paling atas (baris ke-2 / index 1)
+        await sheets.spreadsheets.batchUpdate({
             spreadsheetId,
-            range: 'REPORT!A:J',
+            resource: {
+                requests: [
+                    {
+                        insertDimension: {
+                            range: {
+                                sheetId: sheetId,
+                                dimension: "ROWS",
+                                startIndex: 1,
+                                endIndex: 2
+                            },
+                            inheritFromBefore: false
+                        }
+                    }
+                ]
+            }
+        });
+
+        // Tulis data ke baris ke-2 (yang baru saja dibuat)
+        await sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: 'REPORT!A2:J2',
             valueInputOption: 'USER_ENTERED',
             resource: { values },
         });
@@ -194,7 +305,7 @@ async function processPhotos(chatId, fileIds) {
         if (parsedData.action === 'rekapan') {
             await bot.sendMessage(chatId, "⏳ Data terbaca, sedang menyimpan ke Google Sheets...");
 
-            const isSaved = await simpanKeSpreadsheet(data);
+            const isSaved = await simpanKeSpreadsheet(data, chatId);
 
             const saveStatusMsg = isSaved ?
                 "\n_✅ Data berhasil disimpan ke Spreadsheet._" :
@@ -332,14 +443,17 @@ module.exports = async function handleUpdate(req, res) {
         // COMMAND: /report
         if (text.startsWith('/report')) {
             await bot.sendMessage(chatId, "⏳ Menghitung laporan harian dari Spreadsheet...");
-            const sheets = await getSheetsClient();
-            if (!sheets) {
+            const services = await getGoogleServices();
+            if (!services) {
                 await bot.sendMessage(chatId, "❌ Gagal mengontak Google Sheets.");
                 return res.status(200).send('OK');
             }
 
-            const response = await sheets.spreadsheets.values.get({
-                spreadsheetId: SPREADSHEET_ID,
+            const dailyId = await getDailySpreadsheetId(chatId);
+            const spreadsheetId = dailyId || SPREADSHEET_ID;
+
+            const response = await services.sheets.spreadsheets.values.get({
+                spreadsheetId: spreadsheetId,
                 range: 'REPORT!A:J',
             });
             const rows = response.data.values;
@@ -384,20 +498,20 @@ TF \t\t${formatRp(totalTF)}`;
         if (text.startsWith('/export')) {
             await bot.sendMessage(chatId, "⏳ Sedang menyiapkan file PDF dan Excel Anda...");
             try {
-                const auth = new google.auth.GoogleAuth(
-                    getGoogleAuthOptions(['https://www.googleapis.com/auth/spreadsheets.readonly', 'https://www.googleapis.com/auth/drive.readonly'])
-                );
-                const client = await auth.getClient();
-                const tokenResp = await client.getAccessToken();
+                const services = await getGoogleServices();
+                const dailyId = await getDailySpreadsheetId(chatId);
+                const spreadsheetIdToExport = dailyId || SPREADSHEET_ID;
+
+                const tokenResp = await services.client.getAccessToken();
                 const tokenVal = tokenResp.token;
                 const dateStr = new Date().toISOString().split('T')[0];
 
-                const pdfUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/export?format=pdf`;
+                const pdfUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetIdToExport}/export?format=pdf`;
                 const pdfRes = await fetch(pdfUrl, { headers: { 'Authorization': 'Bearer ' + tokenVal } });
                 const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
                 await bot.sendDocument(chatId, pdfBuffer, { caption: '📄 Laporan Rekapan (PDF)' }, { filename: `Rekapan_${dateStr}.pdf`, contentType: 'application/pdf' });
 
-                const excelUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/export?format=xlsx`;
+                const excelUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetIdToExport}/export?format=xlsx`;
                 const excelRes = await fetch(excelUrl, { headers: { 'Authorization': 'Bearer ' + tokenVal } });
                 const excelBuffer = Buffer.from(await excelRes.arrayBuffer());
                 await bot.sendDocument(chatId, excelBuffer, { caption: '📊 Laporan Rekapan (Excel)' }, { filename: `Rekapan_${dateStr}.xlsx`, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -438,7 +552,7 @@ TF \t\t${formatRp(totalTF)}`;
             }
 
             try {
-                const rows = await fetchSheetData();
+                const rows = await fetchSheetData(chatId);
                 let contextData = "Data kasir kosong.";
                 if (rows && rows.length > 0) {
                     contextData = rows.map(row => row.join(' | ')).join('\n');
