@@ -2,6 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const path = require('path');
 const admin = require('firebase-admin');
+const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const xlsx = require('xlsx');
 
 let bot = null;
@@ -57,16 +58,16 @@ Jika ada 2 gambar (nota manual dan struk), gabungkan datanya (misal ambil no_not
         systemInstruction: "Kamu adalah asisten kasir warung 'Sambal Orek' yang ramah, sopan, dan sigap. Kamu akan menjawab pertanyaan pemilik terkait rekapan penjualan hari ini."
     });
 
-    if (admin.apps.length === 0) {
+    if (admin.getApps().length === 0) {
         let cert;
         if (process.env.FIREBASE_CREDENTIALS) {
             cert = JSON.parse(process.env.FIREBASE_CREDENTIALS);
         } else {
             cert = require(FIREBASE_CREDENTIALS_PATH);
         }
-        admin.initializeApp({ credential: admin.credential.cert(cert) });
+        admin.initializeApp({ credential: admin.cert(cert) });
     }
-    db = admin.firestore();
+    db = getFirestore();
 }
 
 try {
@@ -103,7 +104,7 @@ async function simpanKeFirestore(data) {
             qris: qris,
             tf: tf,
             sys_date: sysDate,
-            createdAt: admin.firestore.FieldValue.serverTimestamp()
+            createdAt: FieldValue.serverTimestamp()
         };
 
         await db.collection('transactions').add(docData);
@@ -204,7 +205,7 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
         
         await docRef.set({ 
             files: groupFiles, 
-            updatedAt: admin.firestore.FieldValue.serverTimestamp() 
+            updatedAt: FieldValue.serverTimestamp() 
         }, { merge: true });
 
         if (groupFiles.length === 1) {
@@ -238,6 +239,9 @@ module.exports = async function handleUpdate(req, res) {
                 initializeGlobals();
                 initError = null;
             } catch (retryErr) {
+                if (bot && req.body && req.body.message && req.body.message.chat) {
+                    bot.sendMessage(req.body.message.chat.id, `⚠️ Bot gagal menyala (Init Error): ${retryErr.message}`).catch(() => {});
+                }
                 return res.status(200).send(`Bot gagal menyala: ${retryErr.message}`);
             }
         }
