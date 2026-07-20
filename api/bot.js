@@ -1,35 +1,25 @@
 const TelegramBot = require('node-telegram-bot-api');
-const { google } = require('googleapis');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const path = require('path');
+const admin = require('firebase-admin');
+const xlsx = require('xlsx');
 
 let bot = null;
 let model = null;
 let chatModel = null;
+let db = null;
 let initError = null;
 
-const CREDENTIALS_PATH = path.resolve(__dirname, '..', 'google-credentials.json');
+const FIREBASE_CREDENTIALS_PATH = path.resolve(__dirname, '..', 'firebase-credentials.json');
 const greetingPatterns = /^(hai|halo|hello|hi|hey|test|ping|pagi|siang|sore|malam|assalamualaikum|woi|prabowo|tes|cd|cde|hidelo|helooo?)$/i;
-const mediaGroups = {};
 
 const formatRp = (angka) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka);
 
-function getGoogleAuthOptions(scopes) {
-    if (process.env.GOOGLE_CREDENTIALS) {
-        return { credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS), scopes };
-    }
-    return { keyFile: CREDENTIALS_PATH, scopes };
-}
-
 function initializeGlobals() {
-    if (bot && model && chatModel) return;
+    if (bot && model && chatModel && db) return;
 
-    if (!process.env.TELEGRAM_BOT_TOKEN) {
-        throw new Error("TELEGRAM_BOT_TOKEN belum disetting di Environment Variables Vercel.");
-    }
-    if (!process.env.GEMINI_API_KEY) {
-        throw new Error("GEMINI_API_KEY belum disetting di Environment Variables Vercel.");
-    }
+    if (!process.env.TELEGRAM_BOT_TOKEN) throw new Error("TELEGRAM_BOT_TOKEN belum disetting.");
+    if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY belum disetting.");
 
     let rawToken = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
     if (rawToken.startsWith('=')) rawToken = rawToken.substring(1).trim();
@@ -66,180 +56,60 @@ Jika ada 2 gambar (nota manual dan struk), gabungkan datanya (misal ambil no_not
         model: "gemini-3.1-flash-lite",
         systemInstruction: "Kamu adalah asisten kasir warung 'Sambal Orek' yang ramah, sopan, dan sigap. Kamu akan menjawab pertanyaan pemilik terkait rekapan penjualan hari ini."
     });
+
+    if (admin.apps.length === 0) {
+        let cert;
+        if (process.env.FIREBASE_CREDENTIALS) {
+            cert = JSON.parse(process.env.FIREBASE_CREDENTIALS);
+        } else {
+            cert = require(FIREBASE_CREDENTIALS_PATH);
+        }
+        admin.initializeApp({ credential: admin.credential.cert(cert) });
+    }
+    db = admin.firestore();
 }
 
-// Coba inisialisasi awal, tapi tangkap errornya
 try {
     initializeGlobals();
 } catch (err) {
     initError = err;
 }
 
-
-async function getGoogleServices() {
-    try {
-        const auth = new google.auth.GoogleAuth(
-            getGoogleAuthOptions(['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/drive.file'])
-        );
-        const client = await auth.getClient();
-        const sheets = google.sheets({ version: 'v4', auth: client });
-        const drive = google.drive({ version: 'v3', auth: client });
-        return { sheets, drive, client };
-    } catch (error) {
-        console.error("Auth error:", error.message);
-        return null;
-    }
+const parseRupiah = (val) => {
+    if (!val) return 0;
+    if (typeof val === 'number') return val;
+    return parseFloat(val.toString().replace(/[^0-9.-]+/g, "")) || 0;
 }
 
-async function getDailySpreadsheetId(chatId = null) {
-    const services = await getGoogleServices();
-    if (!services) return null;
-    const { sheets, drive } = services;
-
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, '0');
-    const dd = String(today.getDate()).padStart(2, '0');
-    const todayStr = `${yyyy}-${mm}-${dd}`;
-    const expectedName = `Rekapan Sambal Orek - ${todayStr}`;
-    
-    // Search in Google Drive for today's spreadsheet
+async function simpanKeFirestore(data) {
     try {
-        const res = await drive.files.list({
-            q: `name = '${expectedName}' and trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet'`,
-            fields: 'files(id, name)',
-            spaces: 'drive'
-        });
-        
-        if (res.data.files && res.data.files.length > 0) {
-            // Found it!
-            return res.data.files[0].id;
-        }
-    } catch (e) {
-        console.error("Error searching drive:", e);
-    }
-
-    // If not found, create new spreadsheet
-    try {
-        const newSpreadsheet = await sheets.spreadsheets.create({
-            resource: {
-                properties: { title: expectedName },
-                sheets: [{ properties: { title: 'REPORT' } }]
-            }
-        });
-        const newId = newSpreadsheet.data.spreadsheetId;
-
-        await drive.permissions.create({
-            fileId: newId,
-            resource: { type: 'anyone', role: 'writer' }
-        });
-
-        await sheets.spreadsheets.values.update({
-            spreadsheetId: newId,
-            range: 'REPORT!A1:J1',
-            valueInputOption: 'USER_ENTERED',
-            resource: {
-                values: [['Order No', 'No Nota', 'Tanggal', 'Jam', 'Kasir', 'Nett Profit', 'Payment Mode', 'CASH', 'QRIS', 'TF']]
-            }
-        });
-
-        if (chatId) {
-            await bot.sendMessage(chatId, `📄 *File Excel Baru Dibuat*\n\nTanggal: ${todayStr}\nLink: https://docs.google.com/spreadsheets/d/${newId}`, { parse_mode: 'Markdown' });
-        }
-
-        return newId;
-    } catch (e) {
-        console.error("Error creating daily spreadsheet:", e);
-        return null;
-    }
-}
-
-async function fetchSheetData(chatId = null) {
-    const services = await getGoogleServices();
-    if (!services) return null;
-    const dailyId = await getDailySpreadsheetId(chatId);
-    if (!dailyId) return null;
-
-    try {
-        const response = await services.sheets.spreadsheets.values.get({
-            spreadsheetId: dailyId,
-            range: 'REPORT!A:J',
-        });
-        return response.data.values;
-    } catch (error) {
-        console.error("Sheets fetch error:", error.message);
-        return null;
-    }
-}
-
-async function simpanKeSpreadsheet(data, chatId = null) {
-    try {
-        const services = await getGoogleServices();
-        if (!services) return false;
-        
-        const sheets = services.sheets;
-        const spreadsheetId = await getDailySpreadsheetId(chatId);
-        if (!spreadsheetId) {
-            console.error("No spreadsheet available.");
-            return false;
-        }
-
         const paymentModeStr = (data.payment_mode || "").toUpperCase();
-        let cash = paymentModeStr.includes('CASH') ? data.nett_profit : "";
-        let qris = paymentModeStr.includes('QRIS') ? data.nett_profit : "";
-        let tf = paymentModeStr.includes('TF') ? data.nett_profit : "";
+        const nett = parseRupiah(data.nett_profit);
+        let cash = paymentModeStr.includes('CASH') ? nett : 0;
+        let qris = paymentModeStr.includes('QRIS') ? nett : 0;
+        let tf = (paymentModeStr.includes('TF') || paymentModeStr.includes('GOJEK') || paymentModeStr.includes('GRAB')) ? nett : 0;
 
-        const values = [
-            [
-                data.order_no || "-",
-                data.no_nota || "-",
-                data.order_date || "-",
-                data.order_time || "-",
-                data.kasir || "-",
-                data.nett_profit || 0,
-                data.payment_mode || "-",
-                cash,
-                qris,
-                tf
-            ]
-        ];
+        const sysDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }); // YYYY-MM-DD
 
-        // Dapatkan Sheet ID untuk sheet 'REPORT'
-        const spreadsheetInfo = await sheets.spreadsheets.get({ spreadsheetId });
-        const sheet = spreadsheetInfo.data.sheets.find(s => s.properties.title === 'REPORT');
-        const sheetId = sheet ? sheet.properties.sheetId : 0;
+        const docData = {
+            order_no: data.order_no || "-",
+            no_nota: data.no_nota || "-",
+            order_date: data.order_date || "-",
+            order_time: data.order_time || "-",
+            kasir: data.kasir || "-",
+            nett_profit: nett,
+            payment_mode: data.payment_mode || "-",
+            cash: cash,
+            qris: qris,
+            tf: tf,
+            sys_date: sysDate,
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+        };
 
-        // Insert baris baru di posisi paling atas (baris ke-2 / index 1)
-        await sheets.spreadsheets.batchUpdate({
-            spreadsheetId,
-            resource: {
-                requests: [
-                    {
-                        insertDimension: {
-                            range: {
-                                sheetId: sheetId,
-                                dimension: "ROWS",
-                                startIndex: 1,
-                                endIndex: 2
-                            },
-                            inheritFromBefore: false
-                        }
-                    }
-                ]
-            }
-        });
-
-        // Tulis data ke baris ke-2 (yang baru saja dibuat)
-        await sheets.spreadsheets.values.update({
-            spreadsheetId,
-            range: 'REPORT!A2:J2',
-            valueInputOption: 'USER_ENTERED',
-            resource: { values },
-        });
-
+        await db.collection('transactions').add(docData);
         return true;
     } catch (error) {
-        console.error("❌ Error Google Sheets:", error);
+        console.error("❌ Error Firestore:", error);
         return false;
     }
 }
@@ -286,13 +156,13 @@ async function processPhotos(chatId, fileIds) {
         }
 
         if (parsedData.action === 'rekapan') {
-            await bot.sendMessage(chatId, "⏳ Data terbaca, sedang menyimpan ke Google Sheets...");
+            await bot.sendMessage(chatId, "⏳ Data terbaca, sedang menyimpan ke Database Firebase...");
 
-            const isSaved = await simpanKeSpreadsheet(data, chatId);
+            const isSaved = await simpanKeFirestore(data);
 
             const saveStatusMsg = isSaved ?
-                "\n_✅ Data berhasil disimpan ke Spreadsheet._" :
-                "\n_❌ Gagal menyimpan ke Spreadsheet._";
+                "\n_✅ Data berhasil disimpan ke Database._" :
+                "\n_❌ Gagal menyimpan ke Database._";
 
             const reply = `*Hasil Pencocokan Nota*\n\n` +
                 `📅 Tanggal: ${data.order_date || '-'}\n` +
@@ -301,7 +171,7 @@ async function processPhotos(chatId, fileIds) {
                 `🧾 No. Nota Manual: ${data.no_nota || '-'}\n` +
                 `📠 No. Order Olsera: ${data.order_no || '-'}\n` +
                 `💳 Metode: ${data.payment_mode || '-'}\n` +
-                `💰 Total: ${formatRp(data.nett_profit || 0)}\n\n` +
+                `💰 Total: ${formatRp(parseRupiah(data.nett_profit))}\n\n` +
                 `📝 *Catatan AI:* Data diproses otomatis.` + saveStatusMsg;
 
             await bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
@@ -317,75 +187,37 @@ async function processPhotos(chatId, fileIds) {
 }
 
 async function handleMediaGroup(chatId, mediaGroupId, fileId) {
-    const services = await getGoogleServices();
-    if (!services) {
-        await processPhotos(chatId, [fileId]);
-        return;
-    }
-    const { sheets } = services;
-    const dailyId = await getDailySpreadsheetId(chatId);
-    if (!dailyId) {
+    if (!db) {
         await processPhotos(chatId, [fileId]);
         return;
     }
     
     try {
-        const res = await sheets.spreadsheets.get({ spreadsheetId: dailyId });
-        const exists = res.data.sheets.some(s => s.properties.title === 'CACHE');
-        if (!exists) {
-            await sheets.spreadsheets.batchUpdate({
-                spreadsheetId: dailyId,
-                resource: { requests: [{ addSheet: { properties: { title: 'CACHE' } } }] }
-            });
+        const docRef = db.collection('media_cache').doc(mediaGroupId);
+        const doc = await docRef.get();
+        let groupFiles = [];
+        if (doc.exists) {
+            groupFiles = doc.data().files || [];
         }
-    } catch (e) {
-        console.error("Error creating CACHE sheet:", e);
-    }
-    
-    try {
-        await sheets.spreadsheets.values.append({
-            spreadsheetId: dailyId,
-            range: 'CACHE!A:B',
-            valueInputOption: 'USER_ENTERED',
-            resource: { values: [[mediaGroupId, fileId]] },
-        });
-    } catch (e) {
-        console.error("Error appending to CACHE:", e);
-        await processPhotos(chatId, [fileId]);
-        return;
-    }
-    
-    // Cek ada berapa foto dalam album ini di CACHE
-    let groupFiles = [];
-    try {
-        const response = await sheets.spreadsheets.values.get({
-            spreadsheetId: dailyId,
-            range: 'CACHE!A:B',
-        });
-        const rows = response.data.values || [];
         
-        for (const row of rows) {
-            if (row[0] === mediaGroupId) {
-                groupFiles.push(row[1]);
-            }
+        groupFiles.push(fileId);
+        
+        await docRef.set({ 
+            files: groupFiles, 
+            updatedAt: admin.firestore.FieldValue.serverTimestamp() 
+        }, { merge: true });
+
+        if (groupFiles.length === 1) {
+            await bot.sendMessage(chatId, "📸 Menerima album foto 1/2, menunggu foto selanjutnya...");
+        } else if (groupFiles.length >= 2) {
+            await bot.sendMessage(chatId, `📸 Menerima album lengkap (${groupFiles.length} lembar), sedang menyatukan data...`);
+            await processPhotos(chatId, groupFiles);
+            // Cleanup cache
+            await docRef.delete();
         }
     } catch (e) {
-        console.error("Error reading CACHE:", e);
+        console.error("MediaGroup Error:", e);
         await processPhotos(chatId, [fileId]);
-        return;
-    }
-    
-    // Logika Trigger Vercel-Telegram:
-    // Telegram mengirim album satu per satu. 
-    // Foto 1 masuk -> CACHE = 1 -> Jangan diproses dulu (kembalikan OK agar Telegram mengirim Foto 2)
-    // Foto 2 masuk -> CACHE = 2 -> KEDUA foto diproses bersamaan!
-    if (groupFiles.length === 1) {
-        await bot.sendMessage(chatId, "📸 Menerima album foto 1/2, menunggu foto selanjutnya...");
-        // Selesai di sini. Vercel mati, Telegram akan mengirim foto kedua.
-    } else if (groupFiles.length >= 2) {
-        await bot.sendMessage(chatId, `📸 Menerima album lengkap (${groupFiles.length} lembar), sedang menyatukan data...`);
-        // Karena ini foto kedua/terakhir, kita proses semua foto dalam album!
-        await processPhotos(chatId, groupFiles);
     }
 }
 
@@ -397,18 +229,15 @@ module.exports = async function handleUpdate(req, res) {
         if (initError) {
             return res.status(200).send(`Init Error: ${initError.message}\n\nPastikan Anda sudah menyetting TELEGRAM_BOT_TOKEN dan GEMINI_API_KEY di Vercel.`);
         }
-        const tokenDebug = process.env.TELEGRAM_BOT_TOKEN || '';
-        return res.status(200).send('Webhook is running. Token length: ' + tokenDebug.length + ' Starts with: ' + tokenDebug.substring(0, 4));
+        return res.status(200).send('Webhook is running.');
     }
 
     try {
-        // Coba init ulang jika sebelumnya gagal, karena request ini mungkin di Vercel yg sudah disetting env-nya
         if (initError || !bot) {
             try {
                 initializeGlobals();
-                initError = null; // berhasil init
+                initError = null;
             } catch (retryErr) {
-                // Return 200 supaya Telegram tidak retry terus-terusan
                 return res.status(200).send(`Bot gagal menyala: ${retryErr.message}`);
             }
         }
@@ -424,96 +253,83 @@ module.exports = async function handleUpdate(req, res) {
 
         // COMMAND: /start
         if (text.startsWith('/start')) {
-            const welcomeMsg = `Halo! 👋 Selamat datang di *Bot Kasir Sambal Orek*.\n\nSaya di sini untuk membantu Anda merekap data harian secara otomatis ke Google Sheets.\n\n*📌 Fitur yang tersedia:*\n1️⃣ *Kirim Foto Nota* 📸\nKirimkan foto *Nota Manual* atau *Struk Olsera*. Anda juga bisa mengirim 2 foto sekaligus (album) untuk digabungkan datanya otomatis.\n\n2️⃣ */report* 📊\nUntuk melihat ringkasan pemasukan hari ini (Cash, QRIS, TF).\n\n3️⃣ */export* 📄\nUntuk mengunduh laporan lengkap dalam format *PDF* dan *Excel*.\n\n4️⃣ *Tanya AI* 🤖\nAnda bisa menanyakan langsung apa saja seputar data penjualan hari ini, misal: _"Berapa total pemasukan cash hari ini?"_\n\nKirimkan foto nota pertama Anda untuk mulai!`;
+            const welcomeMsg = `Halo! 👋 Selamat datang di *Bot Kasir Sambal Orek*.\n\nSaya di sini untuk membantu Anda merekap data harian secara otomatis ke Database.\n\n*📌 Fitur yang tersedia:*\n1️⃣ *Kirim Foto Nota* 📸\nKirimkan foto *Nota Manual* atau *Struk Olsera*.\n\n2️⃣ */report* 📊\nUntuk melihat ringkasan pemasukan hari ini (Cash, QRIS, TF).\n\n3️⃣ */export* 📄\nUntuk mengunduh laporan Excel (.xlsx).\n\n4️⃣ *Tanya AI* 🤖\nTanyakan apa saja terkait rekap hari ini!\n\nKirimkan foto nota pertama Anda untuk mulai!`;
             await bot.sendMessage(chatId, welcomeMsg, { parse_mode: 'Markdown' });
             return res.status(200).send('OK');
         }
 
+        const sysDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' }); // YYYY-MM-DD
+        const displayDate = new Date().toLocaleDateString('id-ID', { timeZone: 'Asia/Jakarta' });
+
         // COMMAND: /report
         if (text.startsWith('/report')) {
-            await bot.sendMessage(chatId, "⏳ Menghitung laporan harian dari Spreadsheet...");
-            const services = await getGoogleServices();
-            if (!services) {
-                await bot.sendMessage(chatId, "❌ Gagal mengontak Google Sheets.");
-                return res.status(200).send('OK');
-            }
-
-            const dailyId = await getDailySpreadsheetId(chatId);
-            const spreadsheetId = dailyId || SPREADSHEET_ID;
-
-            const response = await services.sheets.spreadsheets.values.get({
-                spreadsheetId: spreadsheetId,
-                range: 'REPORT!A:J',
-            });
-            const rows = response.data.values;
-
-            const today = new Date();
-            const yyyy = today.getFullYear();
-            const mm = String(today.getMonth() + 1).padStart(2, '0');
-            const dd = String(today.getDate()).padStart(2, '0');
-            const todayStr = `${yyyy}-${mm}-${dd}`;
-            const displayDate = `${mm}/${dd}/${String(yyyy).slice(-2)}`;
-
-            let totalCash = 0;
-            let totalQris = 0;
-            let totalTF = 0;
-
-            if (rows && rows.length > 0) {
-                for (let i = 1; i < rows.length; i++) {
-                    const row = rows[i];
-                    const orderDate = String(row[2] || "");
-                    if (orderDate.startsWith(todayStr) || orderDate.includes(todayStr)) {
-                        const paymentMode = (row[6] || "").toUpperCase();
-                        const nettProfit = parseFloat((row[5] || "0").replace(/[^0-9.-]+/g, ""));
-                        if (paymentMode.includes('CASH')) totalCash += nettProfit;
-                        else if (paymentMode.includes('QRIS')) totalQris += nettProfit;
-                        else if (paymentMode.includes('TF') || paymentMode.includes('GOJEK')) totalTF += nettProfit;
-                    }
-                }
-            }
-            let totalAll = totalCash + totalQris + totalTF;
-            const reportMessage = `
+            await bot.sendMessage(chatId, "⏳ Menghitung laporan harian dari Firebase...");
+            try {
+                const snapshot = await db.collection('transactions').where('sys_date', '==', sysDate).get();
+                let totalCash = 0, totalQris = 0, totalTF = 0;
+                
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    totalCash += data.cash || 0;
+                    totalQris += data.qris || 0;
+                    totalTF += data.tf || 0;
+                });
+                
+                let totalAll = totalCash + totalQris + totalTF;
+                const reportMessage = `
 *Laporan Harian:* ${displayDate}
 Cash \t\t${formatRp(totalCash)}
 Qris \t\t${formatRp(totalQris)}
 Total \t\t${formatRp(totalAll)}
 Brankas \t${formatRp(totalCash)}
 TF \t\t${formatRp(totalTF)}`;
-            await bot.sendMessage(chatId, reportMessage.trim(), { parse_mode: 'Markdown' });
+                await bot.sendMessage(chatId, reportMessage.trim(), { parse_mode: 'Markdown' });
+            } catch (err) {
+                console.error("Report Error:", err);
+                await bot.sendMessage(chatId, "❌ Gagal mengambil data dari Database.");
+            }
             return res.status(200).send('OK');
         }
 
         // COMMAND: /export
         if (text.startsWith('/export')) {
-            await bot.sendMessage(chatId, "⏳ Sedang menyiapkan file PDF dan Excel Anda...");
+            await bot.sendMessage(chatId, "⏳ Sedang merakit file Excel Anda secara otomatis...");
             try {
-                const services = await getGoogleServices();
-                const dailyId = await getDailySpreadsheetId(chatId);
-                const spreadsheetIdToExport = dailyId || SPREADSHEET_ID;
+                const snapshot = await db.collection('transactions')
+                    .where('sys_date', '==', sysDate)
+                    .get();
 
-                const tokenResp = await services.client.getAccessToken();
-                const tokenVal = tokenResp.token;
-                const dateStr = new Date().toISOString().split('T')[0];
+                const docsData = [];
+                snapshot.forEach(doc => docsData.push(doc.data()));
+                
+                // Urutkan berdasarkan waktu simpan
+                docsData.sort((a, b) => (a.createdAt?.toMillis() || 0) - (b.createdAt?.toMillis() || 0));
 
-                const pdfUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetIdToExport}/export?format=pdf`;
-                const pdfRes = await fetch(pdfUrl, { headers: { 'Authorization': 'Bearer ' + tokenVal } });
-                const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
-                await bot.sendDocument(chatId, pdfBuffer, { caption: '📄 Laporan Rekapan (PDF)' }, { filename: `Rekapan_${dateStr}.pdf`, contentType: 'application/pdf' });
+                const rows = [['Order No', 'No Nota', 'Tanggal', 'Jam', 'Kasir', 'Nett Profit', 'Payment Mode', 'CASH', 'QRIS', 'TF']];
+                
+                docsData.forEach(data => {
+                    rows.push([
+                        data.order_no, data.no_nota, data.order_date, data.order_time, data.kasir,
+                        data.nett_profit, data.payment_mode, data.cash, data.qris, data.tf
+                    ]);
+                });
 
-                const excelUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetIdToExport}/export?format=xlsx`;
-                const excelRes = await fetch(excelUrl, { headers: { 'Authorization': 'Bearer ' + tokenVal } });
-                const excelBuffer = Buffer.from(await excelRes.arrayBuffer());
-                await bot.sendDocument(chatId, excelBuffer, { caption: '📊 Laporan Rekapan (Excel)' }, { filename: `Rekapan_${dateStr}.xlsx`, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                const wb = xlsx.utils.book_new();
+                const ws = xlsx.utils.aoa_to_sheet(rows);
+                xlsx.utils.book_append_sheet(wb, ws, "REPORT");
+                
+                const excelBuffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+                
+                await bot.sendDocument(chatId, excelBuffer, { caption: `📊 Laporan Rekapan (Excel) - ${displayDate}` }, { filename: `Rekapan_${sysDate}.xlsx`, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
             } catch (error) {
                 console.error("Export Error:", error);
-                await bot.sendMessage(chatId, "❌ Gagal mengunduh file laporan.");
+                await bot.sendMessage(chatId, "❌ Gagal mengunduh file laporan Excel. Detail: " + error.message);
             }
             return res.status(200).send('OK');
         }
 
         // FOTO
         if (msg.photo) {
-            // SOLUSI VERCEL: Jika user membalas (reply) foto sebelumnya dengan foto baru
             if (msg.reply_to_message && msg.reply_to_message.photo) {
                 await bot.sendMessage(chatId, "📸 Membaca 2 foto sekaligus (dari reply)...");
                 const fileId1 = msg.reply_to_message.photo[msg.reply_to_message.photo.length - 1].file_id;
@@ -535,19 +351,24 @@ TF \t\t${formatRp(totalTF)}`;
         // TEKS / CHAT AI
         if (msg.text && !msg.text.startsWith('/')) {
             if (greetingPatterns.test(msg.text.trim())) {
-                const welcomeMsg = `Halo! 👋 Selamat datang di *Bot Kasir Sambal Orek*.\n\nSaya di sini untuk membantu Anda merekap data harian secara otomatis ke Google Sheets.\n\n*📌 Fitur yang tersedia:*\n1️⃣ *Kirim Foto Nota* 📸\nKirimkan foto *Nota Manual* atau *Struk Olsera*. Anda juga bisa mengirim 2 foto sekaligus (album) untuk digabungkan datanya otomatis.\n\n2️⃣ */report* 📊\nUntuk melihat ringkasan pemasukan hari ini (Cash, QRIS, TF).\n\n3️⃣ */export* 📄\nUntuk mengunduh laporan lengkap dalam format *PDF* dan *Excel*.\n\n4️⃣ *Tanya AI* 🤖\nAnda bisa menanyakan langsung apa saja seputar data penjualan hari ini, misal: _"Berapa total pemasukan cash hari ini?"_\n\nKirimkan foto nota pertama Anda untuk mulai!`;
-                await bot.sendMessage(chatId, welcomeMsg, { parse_mode: 'Markdown' });
+                await bot.sendMessage(chatId, "Halo! Kirimkan foto nota untuk merekap, ketik /report untuk ringkasan hari ini, atau ketik /export untuk download Excel.");
                 return res.status(200).send('OK');
             }
 
             try {
-                const rows = await fetchSheetData(chatId);
+                const snapshot = await db.collection('transactions').where('sys_date', '==', sysDate).get();
                 let contextData = "Data kasir kosong.";
-                if (rows && rows.length > 0) {
-                    contextData = rows.map(row => row.join(' | ')).join('\n');
+                
+                if (!snapshot.empty) {
+                    const rowStrings = [];
+                    snapshot.forEach(doc => {
+                        const data = doc.data();
+                        rowStrings.push(`${data.order_no} | ${data.no_nota} | ${data.order_time} | ${data.kasir} | ${data.nett_profit} | ${data.payment_mode}`);
+                    });
+                    contextData = rowStrings.join('\n');
                 }
-                const prompt = `Berikut adalah data rekap penjualan (buku kas) warung Sambal Orek:\n\n${contextData}\n\nPesan pengguna: "${msg.text}"\n\nJika pesan pengguna menanyakan data, jawablah berdasarkan data di atas dengan singkat, jelas, dan ramah. Jika tidak ada data relevan, jawab saja bahwa tidak ada data untuk pertanyaan itu. Jika ada angka Rupiah, formatlah dengan rapi.`;
-
+                
+                const prompt = `Berikut adalah data rekap penjualan (buku kas) warung Sambal Orek hari ini:\n\n${contextData}\n\nPesan pengguna: "${msg.text}"\n\nJawablah berdasarkan data di atas dengan singkat, jelas, dan ramah. Jika ada angka Rupiah, formatlah dengan rapi.`;
                 const result = await chatModel.generateContent(prompt);
                 let aiResponse = result.response.text();
                 aiResponse = aiResponse.replace(/\*\*/g, '*');
@@ -555,13 +376,13 @@ TF \t\t${formatRp(totalTF)}`;
             } catch (error) {
                 console.error("Error Q&A:", error.message);
                 try {
-                    const prompt = `Pesan pengguna: "${msg.text}". Data sheets tidak tersedia (error). Jawab dengan ramah bahwa data kasir sedang tidak bisa diakses, tapi tetap tawarkan bantuan.`;
+                    const prompt = `Pesan pengguna: "${msg.text}". Data kasir hari ini tidak tersedia. Jawab ramah.`;
                     const result = await chatModel.generateContent(prompt);
                     let aiResponse = result.response.text();
                     aiResponse = aiResponse.replace(/\*\*/g, '*');
                     await bot.sendMessage(chatId, aiResponse, { parse_mode: 'Markdown' });
-                } catch (fallbackError) {
-                    await bot.sendMessage(chatId, "❌ Maaf, terjadi kesalahan. Detail: " + fallbackError.message);
+                } catch (e) {
+                    await bot.sendMessage(chatId, "❌ Maaf, sistem sedang sibuk.");
                 }
             }
             return res.status(200).send('OK');
@@ -570,12 +391,11 @@ TF \t\t${formatRp(totalTF)}`;
         res.status(200).send('OK');
     } catch (err) {
         console.error("Unhandled message error:", err);
-        // Mengirim error message kembali ke Telegram jika memungkinkan
         if (bot && req.body && req.body.message && req.body.message.chat) {
             try {
                 await bot.sendMessage(req.body.message.chat.id, "❌ Terjadi Error Fatal di Vercel: \n" + err.message);
             } catch (e) { }
         }
-        res.status(500).send('Error: ' + err.message + '\n' + err.stack);
+        res.status(500).send('Error: ' + err.message);
     }
 };
