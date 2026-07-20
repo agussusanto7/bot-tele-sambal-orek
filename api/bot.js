@@ -226,10 +226,10 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
         });
         
         if (isFirst) {
-            await bot.sendMessage(chatId, "📸 Menerima album foto, sedang mengumpulkan data (tunggu ±5 detik)...");
+            await bot.sendMessage(chatId, "📸 Menerima album foto, sedang menunggu semua foto masuk (tunggu ±15 detik)...");
             
-            // Tunggu 5 detik agar Vercel menerima webhook foto-foto lainnya
-            await new Promise(r => setTimeout(r, 5000));
+            // Tunggu 15 detik agar Vercel menerima webhook foto-foto lainnya (berguna jika koneksi upload lambat)
+            await new Promise(r => setTimeout(r, 15000));
             
             // Ambil data terbaru setelah menunggu
             const finalDoc = await docRef.get();
