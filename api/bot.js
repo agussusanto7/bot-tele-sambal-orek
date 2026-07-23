@@ -353,13 +353,32 @@ module.exports = async function handleUpdate(req, res) {
                 });
                 
                 let totalAll = totalCash + totalQris + totalTF;
+
+                const dailyCashDoc = await db.collection('daily_cash').doc(sysDate).get();
+                let physicalBrankas = 0;
+                let hasPhysicalBrankas = false;
+                if (dailyCashDoc.exists && dailyCashDoc.data().brankas !== undefined) {
+                    physicalBrankas = dailyCashDoc.data().brankas;
+                    hasPhysicalBrankas = true;
+                }
+
+                let brankasDisplay = hasPhysicalBrankas ? formatRp(physicalBrankas) : "Rp0 (Belum input)";
+                let selisihDisplay = "";
+                
+                if (hasPhysicalBrankas) {
+                    const selisih = physicalBrankas - totalCash;
+                    if (selisih > 0) selisihDisplay = `\nSelisih \t\tLebih ${formatRp(selisih)}`;
+                    else if (selisih < 0) selisihDisplay = `\nSelisih \t\tMinus ${formatRp(Math.abs(selisih))}`;
+                    else selisihDisplay = `\nSelisih \t\tPas (Rp0)`;
+                }
+
                 const reportMessage = `
 *Laporan Harian:* ${displayDate}
 Cash \t\t${formatRp(totalCash)}
 Qris \t\t${formatRp(totalQris)}
-Total \t\t${formatRp(totalAll)}
-Brankas \t${formatRp(totalCash)}
-TF \t\t${formatRp(totalTF)}`;
+TF \t\t${formatRp(totalTF)}
+Brankas \t${brankasDisplay}${selisihDisplay}
+Total \t\t${formatRp(totalAll)}`;
                 await bot.sendMessage(chatId, reportMessage.trim(), { parse_mode: 'Markdown' });
             } catch (err) {
                 console.error("Report Error:", err);
@@ -388,6 +407,12 @@ TF \t\t${formatRp(totalTF)}`;
                 });
                 
                 let totalAll = totalCash + totalQris + totalTF;
+
+                const dailyCashDoc = await db.collection('daily_cash').doc(sysDate).get();
+                let physicalBrankas = 0;
+                if (dailyCashDoc.exists && dailyCashDoc.data().brankas !== undefined) {
+                    physicalBrankas = dailyCashDoc.data().brankas;
+                }
                 
                 // Urutkan berdasarkan waktu simpan
                 docsData.sort((a, b) => (a.createdAt?.toMillis() || 0) - (b.createdAt?.toMillis() || 0));
@@ -422,9 +447,9 @@ TF \t\t${formatRp(totalTF)}`;
                     ["", displayDate], // Baris 0
                     ["Cash", formatUangSummary(totalCash)], // Baris 1
                     ["Qris", formatUangSummary(totalQris)], // Baris 2
-                    ["Total", formatUangSummary(totalAll)], // Baris 3
-                    ["Brankas", formatUangSummary(totalCash)], // Baris 4
-                    ["TF", formatUangSummary(totalTF)] // Baris 5
+                    ["TF", formatUangSummary(totalTF)], // Baris 3
+                    ["Brankas", formatUangSummary(physicalBrankas)], // Baris 4
+                    ["Total", formatUangSummary(totalAll)] // Baris 5
                 ];
 
                 for (let i = 0; i < summaryData.length; i++) {
@@ -505,6 +530,39 @@ TF \t\t${formatRp(totalTF)}`;
 
         // TEKS / CHAT AI
         if (msg.text && !msg.text.startsWith('/')) {
+            const lowerText = msg.text.trim().toLowerCase();
+            
+            if (lowerText.startsWith('brankas') || lowerText.startsWith('uang brankas')) {
+                const amountMatch = lowerText.match(/[\d.,]+/);
+                if (amountMatch) {
+                    const brankasAmount = parseRupiah(amountMatch[0]);
+                    
+                    await db.collection('daily_cash').doc(sysDate).set({
+                        brankas: brankasAmount,
+                        updatedAt: FieldValue.serverTimestamp()
+                    }, { merge: true });
+
+                    const snapshot = await db.collection('transactions').where('sys_date', '==', sysDate).get();
+                    let totalCash = 0;
+                    snapshot.forEach(doc => {
+                        totalCash += doc.data().cash || 0;
+                    });
+                    
+                    const selisih = brankasAmount - totalCash;
+                    let selisihText = "Pas (Rp0)";
+                    if (selisih > 0) selisihText = `Lebih ${formatRp(selisih)}`;
+                    else if (selisih < 0) selisihText = `Minus ${formatRp(Math.abs(selisih))}`;
+                    
+                    const replyMsg = `✅ **Data Brankas Fisik Tersimpan!**\n\n` + 
+                                     `💰 Fisik Brankas: ${formatRp(brankasAmount)}\n` +
+                                     `📊 Total Cash Sistem: ${formatRp(totalCash)}\n` +
+                                     `⚖️ Status Selisih: **${selisihText}**`;
+                                     
+                    await bot.sendMessage(chatId, replyMsg, { parse_mode: 'Markdown' });
+                    return res.status(200).send('OK');
+                }
+            }
+
             if (greetingPatterns.test(msg.text.trim())) {
                 await bot.sendMessage(chatId, "Halo! Kirimkan foto nota untuk merekap, ketik /report untuk ringkasan hari ini, atau ketik /export untuk download Excel.");
                 return res.status(200).send('OK');
