@@ -342,7 +342,16 @@ module.exports = async function handleUpdate(req, res) {
 
         // COMMAND: /start
         if (text.startsWith('/start')) {
-            const welcomeMsg = `Halo! 👋 Selamat datang di *Bot Kasir Sambal Orek*.\n\nSaya di sini untuk membantu Anda merekap data harian secara otomatis ke Database.\n\n*📌 Fitur yang tersedia:*\n1️⃣ *Kirim Foto Nota* 📸\nKirimkan foto *Nota Manual* atau *Struk Olsera*.\n\n2️⃣ */report* 📊\nUntuk melihat ringkasan pemasukan hari ini (Cash, QRIS, TF).\n\n3️⃣ */export* 📄\nUntuk mengunduh laporan Excel (.xlsx).\n\n4️⃣ *Tanya AI* 🤖\nTanyakan apa saja terkait rekap hari ini!\n\nKirimkan foto nota pertama Anda untuk mulai!`;
+            try {
+                await db.collection('config').doc('admin').set({
+                    chatId: chatId,
+                    updatedAt: FieldValue.serverTimestamp()
+                }, { merge: true });
+            } catch (e) {
+                console.error("Gagal menyimpan chatId admin:", e);
+            }
+            
+            const welcomeMsg = `Halo! 👋 Selamat datang di *Bot Kasir Sambal Orek*.\n\nSaya asisten cerdas yang siap membantu merekap buku kas Anda setiap hari.\n\n*📌 CARA PENGGUNAAN & FITUR UTAMA:*\n\n1️⃣ *Rekap Nota Otomatis* 📸\nKirim foto *Nota Manual* atau *Struk Digital*. Saya akan membacanya dan memasukannya ke sistem.\n_(Bisa kirim 1 foto, atau beberapa foto sekaligus sebagai album)_\n\n2️⃣ *Cek Laporan Harian* 📊\nKetik /report untuk melihat total pemasukan hari ini (Cash, QRIS, Transfer, dan fisik Brankas).\n\n3️⃣ *Download Excel* 📄\nKetik /export untuk mengunduh laporan rapi ke file Excel (.xlsx).\n\n4️⃣ *[BARU!] Input Uang Fisik (Brankas)* 💰\nKetik langsung **Brankas 250000** atau **Uang brankas 250000**. Saya akan mencatatnya dan menghitung otomatis jika ada selisih (Lebih/Minus) dengan sistem.\n\n5️⃣ *Tanya Jawab Pintar (AI)* 🤖\nKetik pertanyaan santai, contoh: _"Total yang bayar QRIS hari ini berapa?"_ dan saya akan menjawab berdasarkan rekap data asli.\n\n6️⃣ *[BARU!] Pengingat Pagi* ⏰\nSetiap jam 07:00 pagi, saya akan otomatis mengirim notifikasi agar Anda tidak lupa merekap data harian.\n\nSelamat bertugas, Bos! Kirimkan foto nota pertama Anda untuk memulai!`;
             await bot.sendMessage(chatId, welcomeMsg, { parse_mode: 'Markdown' });
             return res.status(200).send('OK');
         }
