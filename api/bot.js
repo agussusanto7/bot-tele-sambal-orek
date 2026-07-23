@@ -57,7 +57,7 @@ Jika foto-foto tersebut adalah pasangan nota manual & struk digital dari pesanan
 
     chatModel = genAI.getGenerativeModel({
         model: "gemini-3.1-flash-lite",
-        systemInstruction: "Kamu adalah asisten kasir warung 'Sambal Orek' yang ramah, sopan, dan sigap. Kamu akan menjawab pertanyaan pemilik terkait rekapan penjualan hari ini."
+        systemInstruction: "Kamu adalah asisten kasir warung 'Sambal Orek'. Tugasmu adalah menjawab pertanyaan pemilik HANYA BERDASARKAN data hari ini yang diberikan.\n\nATURAN PENTING:\n1. JANGAN PERNAH mengarang data, tanggal, atau angka (halusinasi). Jika pertanyaan tidak bisa dijawab dengan data yang diberikan, katakan: 'Maaf Bos, saya hanya bisa melihat data penjualan hari ini saja.'\n2. Buat format chat yang rapi dan 'user-friendly'. Gunakan enter/baris baru yang lega antar paragraf, serta gunakan emoji dan bullet points (poin-poin) agar nyaman dibaca.\n3. Selalu bersikap ramah, sopan, sigap, dan gunakan panggilan 'Bos'."
     });
 
     if (admin.getApps().length === 0) {
@@ -110,12 +110,13 @@ async function simpanKeFirestore(data) {
         };
 
         const now = new Date();
-        const yyyy = now.getFullYear();
-        const mm = String(now.getMonth() + 1).padStart(2, '0');
-        const dd = String(now.getDate()).padStart(2, '0');
-        const hh = String(now.getHours()).padStart(2, '0');
-        const min = String(now.getMinutes()).padStart(2, '0');
-        const ss = String(now.getSeconds()).padStart(2, '0');
+        const dateWIB = new Date(now.getTime() + (7 * 60 * 60 * 1000)); // Konversi ke WIB (UTC+7)
+        const yyyy = dateWIB.getUTCFullYear();
+        const mm = String(dateWIB.getUTCMonth() + 1).padStart(2, '0');
+        const dd = String(dateWIB.getUTCDate()).padStart(2, '0');
+        const hh = String(dateWIB.getUTCHours()).padStart(2, '0');
+        const min = String(dateWIB.getUTCMinutes()).padStart(2, '0');
+        const ss = String(dateWIB.getUTCSeconds()).padStart(2, '0');
         const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
         
         const docId = `${yyyy}-${mm}-${dd}_${hh}-${min}-${ss}_${randomStr}`;
@@ -585,14 +586,15 @@ Total \t\t${formatRp(totalAll)}`;
                 
                 if (!snapshot.empty) {
                     const rowStrings = [];
+                    rowStrings.push(`(Format: Order No | No Nota | Jam | Kasir | Pendapatan Bersih | Tipe Pembayaran)`);
                     snapshot.forEach(doc => {
                         const data = doc.data();
-                        rowStrings.push(`${data.order_no} | ${data.no_nota} | ${data.order_time} | ${data.kasir} | ${data.nett_profit} | ${data.payment_mode}`);
+                        rowStrings.push(`- ${data.order_no} | ${data.no_nota} | ${data.order_time} | ${data.kasir} | Rp${data.nett_profit} | ${data.payment_mode}`);
                     });
                     contextData = rowStrings.join('\n');
                 }
                 
-                const prompt = `Berikut adalah data rekap penjualan (buku kas) warung Sambal Orek hari ini:\n\n${contextData}\n\nPesan pengguna: "${msg.text}"\n\nJawablah berdasarkan data di atas dengan singkat, jelas, dan ramah. Jika ada angka Rupiah, formatlah dengan rapi.`;
+                const prompt = `DATA KASIR HARI INI (${displayDate}):\n${contextData}\n\nPertanyaan Bos: "${msg.text}"\n\nInstruksi: Jawablah pertanyaan di atas HANYA berdasarkan Data Kasir Hari Ini. Jangan pernah mengarang data. Format jawabanmu agar rapi, banyak spasi enter (margin), dan gunakan list.`;
                 const result = await chatModel.generateContent(prompt);
                 let aiResponse = result.response.text();
                 aiResponse = aiResponse.replace(/\*\*/g, '*');
