@@ -377,7 +377,17 @@ TF \t\t${formatRp(totalTF)}`;
                     .get();
 
                 const docsData = [];
-                snapshot.forEach(doc => docsData.push(doc.data()));
+                let totalCash = 0, totalQris = 0, totalTF = 0;
+
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    docsData.push(data);
+                    totalCash += data.cash || 0;
+                    totalQris += data.qris || 0;
+                    totalTF += data.tf || 0;
+                });
+                
+                let totalAll = totalCash + totalQris + totalTF;
                 
                 // Urutkan berdasarkan waktu simpan
                 docsData.sort((a, b) => (a.createdAt?.toMillis() || 0) - (b.createdAt?.toMillis() || 0));
@@ -404,28 +414,60 @@ TF \t\t${formatRp(totalTF)}`;
                     ]);
                 });
 
+                // Tambahkan ringkasan di sebelah kanan (Mulai dari kolom L / index 11)
+                const summaryStartCol = 11; 
+                const formatUangSummary = (val) => `Rp ${Number(val || 0).toLocaleString('id-ID')}`;
+                
+                const summaryData = [
+                    ["", displayDate], // Baris 0
+                    ["Cash", formatUangSummary(totalCash)], // Baris 1
+                    ["Qris", formatUangSummary(totalQris)], // Baris 2
+                    ["Total", formatUangSummary(totalAll)], // Baris 3
+                    ["Brankas", formatUangSummary(totalCash)], // Baris 4
+                    ["TF", formatUangSummary(totalTF)] // Baris 5
+                ];
+
+                for (let i = 0; i < summaryData.length; i++) {
+                    if (!rows[i]) rows[i] = [];
+                    while (rows[i].length < summaryStartCol) {
+                        rows[i].push("");
+                    }
+                    rows[i].push(summaryData[i][0]); // Label
+                    rows[i].push(summaryData[i][1]); // Nilai
+                }
+
                 const wb = xlsx.utils.book_new();
                 const ws = xlsx.utils.aoa_to_sheet(rows);
                 
-                // Atur Lebar Kolom (Presisi)
+                // Atur Lebar Kolom
                 ws['!cols'] = [
-                    {wch: 25}, // Order No
-                    {wch: 15}, // No Nota
-                    {wch: 12}, // Tanggal
-                    {wch: 10}, // Jam
-                    {wch: 22}, // Kasir
-                    {wch: 18}, // Nett Profit
-                    {wch: 15}, // Payment Mode
-                    {wch: 18}, // CASH
-                    {wch: 18}, // QRIS
-                    {wch: 18}  // TF
+                    {wch: 25}, // A: Order No
+                    {wch: 15}, // B: No Nota
+                    {wch: 12}, // C: Tanggal
+                    {wch: 10}, // D: Jam
+                    {wch: 22}, // E: Kasir
+                    {wch: 18}, // F: Nett Profit
+                    {wch: 15}, // G: Payment Mode
+                    {wch: 18}, // H: CASH
+                    {wch: 18}, // I: QRIS
+                    {wch: 18}, // J: TF
+                    {wch: 5},  // K: Jarak Kosong
+                    {wch: 15}, // L: Summary Label
+                    {wch: 20}  // M: Summary Value
                 ];
 
-                // Tambahkan style bold (didukung oleh beberapa software Excel)
+                // Tambahkan style bold 
+                // Header tabel utama
                 for (let c = 0; c < 10; c++) {
                     const cellRef = xlsx.utils.encode_cell({r: 0, c: c});
-                    if (ws[cellRef]) {
-                        ws[cellRef].s = { font: { bold: true } };
+                    if (ws[cellRef]) ws[cellRef].s = { font: { bold: true } };
+                }
+                
+                // Header & Isi Summary
+                for (let r = 0; r <= 5; r++) {
+                    for (let c = 11; c <= 12; c++) {
+                        const cellRef = xlsx.utils.encode_cell({r: r, c: c});
+                        if (ws[cellRef]) ws[cellRef].s = { font: { bold: true } };
                     }
                 }
 
