@@ -571,7 +571,7 @@ Total \t\t${formatRp(totalAll)}`;
         if (msg.text && !msg.text.startsWith('/')) {
             const lowerText = msg.text.trim().toLowerCase();
             
-            const isBrankasInput = /^(uang\s+)?brang?kas/i.test(lowerText);
+            const isBrankasInput = /^(uang\s+)?brang?k(as|at)/i.test(lowerText);
             if (isBrankasInput) {
                 const slangMatch = lowerText.match(/([\d.,]+)\s*(jt|juta|rb|ribu|k)?/i);
                 if (slangMatch && slangMatch[1]) {
