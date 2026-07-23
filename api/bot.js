@@ -129,7 +129,22 @@ async function simpanKeFirestore(data) {
     }
 }
 
-async function processPhotos(chatId, fileIds) {
+async function processPhotos(chatId, fileIds, loadingMessageId = null) {
+    const sendOrEdit = async (text, options = {}) => {
+        if (loadingMessageId) {
+            try {
+                await bot.editMessageText(text, { chat_id: chatId, message_id: loadingMessageId, ...options });
+                return loadingMessageId;
+            } catch (e) {
+                // Ignore identical message error
+            }
+        } else {
+            const msg = await bot.sendMessage(chatId, text, options);
+            loadingMessageId = msg.message_id;
+        }
+        return loadingMessageId;
+    };
+
     try {
         const imageParts = [];
         for (const fileId of fileIds) {
@@ -164,7 +179,7 @@ PENTING:
             }
         } catch (e) {
             console.error("AI Response error:", aiResponse);
-            await bot.sendMessage(chatId, "❌ AI memberikan format balasan yang salah.");
+            await sendOrEdit("❌ AI memberikan format balasan yang salah.");
             return;
         }
 
@@ -174,7 +189,7 @@ PENTING:
         }
 
         if (parsedData.action === 'rekapan') {
-            await bot.sendMessage(chatId, `⏳ Data terbaca (${dataArray.length} transaksi), sedang menyimpan ke Database Firebase...`);
+            await sendOrEdit(`⏳ Data terbaca (${dataArray.length} transaksi), sedang menyimpan ke Database Firebase...`);
 
             let successCount = 0;
             let reply = "";
@@ -223,14 +238,14 @@ PENTING:
                 reply += `📝 *Berhasil menyimpan ${successCount} dari ${dataArray.length} transaksi.*`;
             }
 
-            await bot.sendMessage(chatId, reply, { parse_mode: 'Markdown' });
+            await sendOrEdit(reply, { parse_mode: 'Markdown' });
         }
     } catch (error) {
         console.error("Error Processing Image(s):", error);
         if (error.message && (error.message.toLowerCase().includes('gemini') || error.message.toLowerCase().includes('google'))) {
-            await bot.sendMessage(chatId, "❌ Server Gemini Error: API AI sedang bermasalah atau tidak tersambung. Detail: " + error.message);
+            await sendOrEdit("❌ Server Gemini Error: API AI sedang bermasalah atau tidak tersambung. Detail: " + error.message);
         } else {
-            await bot.sendMessage(chatId, "❌ Gagal memproses gambar. Pastikan tulisan pada nota terbaca dengan jelas. Detail: " + error.message);
+            await sendOrEdit("❌ Gagal memproses gambar. Pastikan tulisan pada nota terbaca dengan jelas. Detail: " + error.message);
         }
     }
 }
@@ -263,7 +278,8 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
         });
         
         if (isFirst) {
-            await bot.sendMessage(chatId, "📸 Menerima album foto... sedang mengumpulkan (bot akan memproses otomatis setelah foto terakhir masuk)...");
+            const msg = await bot.sendMessage(chatId, "📸 Menerima album foto... sedang mengumpulkan otomatis...");
+            const loadingMessageId = msg.message_id;
             
             let groupFiles = [];
             let lastLength = 1;
@@ -289,8 +305,10 @@ async function handleMediaGroup(chatId, mediaGroupId, fileId) {
                 }
             }
             
-            await bot.sendMessage(chatId, `📸 Memproses total ${groupFiles.length} foto sekaligus...`);
-            await processPhotos(chatId, groupFiles);
+            try {
+                await bot.editMessageText(`📸 Memproses total ${groupFiles.length} foto sekaligus...`, { chat_id: chatId, message_id: loadingMessageId });
+            } catch(e) {}
+            await processPhotos(chatId, groupFiles, loadingMessageId);
             
             // Bersihkan cache
             await docRef.delete();
@@ -532,10 +550,10 @@ Total \t\t${formatRp(totalAll)}`;
         // FOTO
         if (msg.photo) {
             if (msg.reply_to_message && msg.reply_to_message.photo) {
-                await bot.sendMessage(chatId, "📸 Membaca 2 foto sekaligus (dari reply)...");
+                const waitMsg = await bot.sendMessage(chatId, "📸 Membaca 2 foto sekaligus (dari reply)...");
                 const fileId1 = msg.reply_to_message.photo[msg.reply_to_message.photo.length - 1].file_id;
                 const fileId2 = msg.photo[msg.photo.length - 1].file_id;
-                await processPhotos(chatId, [fileId1, fileId2]);
+                await processPhotos(chatId, [fileId1, fileId2], waitMsg.message_id);
                 return res.status(200).send('OK');
             }
 
@@ -543,8 +561,8 @@ Total \t\t${formatRp(totalAll)}`;
                 await handleMediaGroup(chatId, msg.media_group_id, msg.photo[msg.photo.length - 1].file_id);
                 return res.status(200).send('OK');
             } else {
-                await bot.sendMessage(chatId, "🔍 Membaca dan mencocokkan nota...");
-                await processPhotos(chatId, [msg.photo[msg.photo.length - 1].file_id]);
+                const waitMsg = await bot.sendMessage(chatId, "🔍 Membaca isi nota...");
+                await processPhotos(chatId, [msg.photo[msg.photo.length - 1].file_id], waitMsg.message_id);
                 return res.status(200).send('OK');
             }
         }
