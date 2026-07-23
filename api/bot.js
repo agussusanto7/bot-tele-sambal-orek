@@ -571,34 +571,48 @@ Total \t\t${formatRp(totalAll)}`;
         if (msg.text && !msg.text.startsWith('/')) {
             const lowerText = msg.text.trim().toLowerCase();
             
-            if (lowerText.startsWith('brankas') || lowerText.startsWith('uang brankas')) {
-                const amountMatch = lowerText.match(/[\d.,]+/);
-                if (amountMatch) {
-                    const brankasAmount = parseRupiah(amountMatch[0]);
-                    
-                    await db.collection('daily_cash').doc(sysDate).set({
-                        brankas: brankasAmount,
-                        updatedAt: FieldValue.serverTimestamp()
-                    }, { merge: true });
+            const isBrankasInput = /^(uang\s+)?brang?kas/i.test(lowerText);
+            if (isBrankasInput) {
+                const slangMatch = lowerText.match(/([\d.,]+)\s*(jt|juta|rb|ribu|k)?/i);
+                if (slangMatch && slangMatch[1]) {
+                    let numStr = slangMatch[1].replace(/,/g, '.');
+                    let multiplierStr = slangMatch[2] ? slangMatch[2].toLowerCase() : '';
+                    let brankasAmount = 0;
 
-                    const snapshot = await db.collection('transactions').where('sys_date', '==', sysDate).get();
-                    let totalCash = 0;
-                    snapshot.forEach(doc => {
-                        totalCash += doc.data().cash || 0;
-                    });
-                    
-                    const selisih = brankasAmount - totalCash;
-                    let selisihText = "Pas (Rp0)";
-                    if (selisih > 0) selisihText = `Lebih ${formatRp(selisih)}`;
-                    else if (selisih < 0) selisihText = `Minus ${formatRp(Math.abs(selisih))}`;
-                    
-                    const replyMsg = `✅ **Data Brankas Fisik Tersimpan!**\n\n` + 
-                                     `💰 Fisik Brankas: ${formatRp(brankasAmount)}\n` +
-                                     `📊 Total Cash Sistem: ${formatRp(totalCash)}\n` +
-                                     `⚖️ Status Selisih: **${selisihText}**`;
-                                     
-                    await bot.sendMessage(chatId, replyMsg, { parse_mode: 'Markdown' });
-                    return res.status(200).send('OK');
+                    if (multiplierStr) {
+                        brankasAmount = parseFloat(numStr);
+                        if (multiplierStr === 'jt' || multiplierStr === 'juta') brankasAmount *= 1000000;
+                        else if (multiplierStr === 'rb' || multiplierStr === 'ribu' || multiplierStr === 'k') brankasAmount *= 1000;
+                    } else {
+                        const cleanString = numStr.replace(/\D/g, '');
+                        brankasAmount = parseInt(cleanString, 10) || 0;
+                    }
+
+                    if (brankasAmount >= 0) {
+                        await db.collection('daily_cash').doc(sysDate).set({
+                            brankas: brankasAmount,
+                            updatedAt: FieldValue.serverTimestamp()
+                        }, { merge: true });
+
+                        const snapshot = await db.collection('transactions').where('sys_date', '==', sysDate).get();
+                        let totalCash = 0;
+                        snapshot.forEach(doc => {
+                            totalCash += doc.data().cash || 0;
+                        });
+                        
+                        const selisih = brankasAmount - totalCash;
+                        let selisihText = "Pas (Rp0)";
+                        if (selisih > 0) selisihText = `Lebih ${formatRp(selisih)}`;
+                        else if (selisih < 0) selisihText = `Minus ${formatRp(Math.abs(selisih))}`;
+                        
+                        const replyMsg = `✅ **Data Brankas Fisik Tersimpan!**\n\n` + 
+                                         `💰 Fisik Brankas: ${formatRp(brankasAmount)}\n` +
+                                         `📊 Total Cash Sistem: ${formatRp(totalCash)}\n` +
+                                         `⚖️ Status Selisih: **${selisihText}**`;
+                                         
+                        await bot.sendMessage(chatId, replyMsg, { parse_mode: 'Markdown' });
+                        return res.status(200).send('OK');
+                    }
                 }
             }
 
