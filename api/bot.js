@@ -622,20 +622,57 @@ Total \t\t${formatRp(totalAll)}`;
             }
 
             try {
-                const snapshot = await db.collection('transactions').where('sys_date', '==', sysDate).get();
-                let contextData = "Data kasir kosong.";
+                const now = new Date();
+                const currentTime = now.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit' });
                 
-                if (!snapshot.empty) {
-                    const rowStrings = [];
-                    rowStrings.push(`(Format: Order No | No Nota | Jam | Kasir | Pendapatan Bersih | Tipe Pembayaran)`);
-                    snapshot.forEach(doc => {
-                        const data = doc.data();
-                        rowStrings.push(`- ${data.order_no} | ${data.no_nota} | ${data.order_time} | ${data.kasir} | Rp${data.nett_profit} | ${data.payment_mode}`);
-                    });
-                    contextData = rowStrings.join('\n');
+                const currentMonth = sysDate.substring(0, 7);
+                const currentYear = sysDate.substring(0, 4);
+
+                // Fetch data untuk tahun ini agar bisa jawab rekap bulan, tahun, dan kemarin
+                const snapshot = await db.collection('transactions').where('sys_date', '>=', `${currentYear}-01-01`).get();
+                
+                let todayDetails = [];
+                let totalToday = 0;
+                let totalMonth = 0;
+                let totalYear = 0;
+                let dailyTotals = {};
+
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    const date = data.sys_date;
+                    const profit = parseInt(data.nett_profit) || 0;
+                    
+                    totalYear += profit;
+                    
+                    if (date.startsWith(currentMonth)) {
+                        totalMonth += profit;
+                    }
+                    
+                    if (date === sysDate) {
+                        totalToday += profit;
+                        todayDetails.push(`- ${data.order_no} | ${data.no_nota} | ${data.order_time} | ${data.kasir} | Rp${profit} | ${data.payment_mode}`);
+                    }
+                    
+                    if (!dailyTotals[date]) dailyTotals[date] = 0;
+                    dailyTotals[date] += profit;
+                });
+                
+                let pastDaysSummary = [];
+                const sortedDates = Object.keys(dailyTotals).sort((a,b) => b.localeCompare(a));
+                for (let i = 0; i < Math.min(8, sortedDates.length); i++) {
+                    const d = sortedDates[i];
+                    if (d !== sysDate) {
+                        pastDaysSummary.push(`- Tanggal ${d}: Rp ${dailyTotals[d].toLocaleString('id-ID')}`);
+                    }
+                }
+
+                let contextData = "Data kasir hari ini kosong.";
+                if (todayDetails.length > 0) {
+                    contextData = `(Format: Order No | No Nota | Jam | Kasir | Pendapatan Bersih | Tipe Pembayaran)\n` + todayDetails.join('\n');
                 }
                 
-                const prompt = `DATA KASIR HARI INI (${displayDate}):\n${contextData}\n\nPertanyaan Bos: "${msg.text}"\n\nInstruksi: Jawablah pertanyaan di atas HANYA berdasarkan Data Kasir Hari Ini. Jangan pernah mengarang data. Format jawabanmu agar rapi, banyak spasi enter (margin), dan gunakan list.`;
+                const prompt = `INFORMASI WAKTU SAAT INI:\n- Tanggal: ${displayDate}\n- Jam: ${currentTime} WIB\n\nRINGKASAN PENDAPATAN:\n- Total Hari Ini (${sysDate}): Rp ${totalToday.toLocaleString('id-ID')}\n- Total Bulan Ini (${currentMonth}): Rp ${totalMonth.toLocaleString('id-ID')}\n- Total Tahun Ini (${currentYear}): Rp ${totalYear.toLocaleString('id-ID')}\n\nPENDAPATAN 7 HARI TERAKHIR (Gunakan ini jika ditanya "kemarin" atau tanggal sebelumnya):\n${pastDaysSummary.length > 0 ? pastDaysSummary.join('\n') : '- Belum ada data sebelum hari ini'}\n\nDATA KASIR HARI INI (Detail khusus hari ini saja):\n${contextData}\n\nPertanyaan Bos: "${msg.text}"\n\nInstruksi: Jawablah pertanyaan di atas berdasarkan konteks data terbaru di atas. Jika bos bertanya tentang bulan ini, tahun ini, kemarin, atau jam saat ini, kamu SUDAH TAHU jawabannya dari informasi di atas. Jika ditanya tanggal lain di luar hari ini, ambil dari "Pendapatan 7 Hari Terakhir". Jangan pernah mengarang nominal pendapatan. Format jawabanmu agar rapi, banyak spasi enter (margin), ramah dan gunakan list.`;
+                
                 const result = await chatModel.generateContent(prompt);
                 let aiResponse = result.response.text();
                 aiResponse = aiResponse.replace(/\*\*/g, '*');
